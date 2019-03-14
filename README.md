@@ -1,4 +1,4 @@
-# GreenPlum Data Source for Apache Spark [![codecov](https://codecov.io/gh/yaooqinn/spark-greenplum/branch/master/graph/badge.svg)](https://codecov.io/gh/yaooqinn/spark-greenplum) [![Build Status](https://travis-ci.org/yaooqinn/spark-greenplum.svg?branch=master)](https://travis-ci.org/yaooqinn/spark-greenplum)[![HitCount](http://hits.dwyl.io/yaooqinn/spark-greenplum.svg)](http://hits.dwyl.io/yaooqinn/spark-greenplum)
+# GreenPlum Data Source for Apache Spark [![codecov](https://codecov.io/gh/yaooqinn/spark-greenplum/branch/master/graph/badge.svg)](https://codecov.io/gh/yaooqinn/spark-greenplum) [![Build Status](https://travis-ci.com/yaooqinn/spark-greenplum.svg?branch=master)](https://travis-ci.com/yaooqinn/spark-greenplum)[![HitCount](http://hits.dwyl.io/yaooqinn/spark-greenplum.svg)](http://hits.dwyl.io/yaooqinn/spark-greenplum)
 
 A library for reading data from and transferring data to Greenplum databases with Apache Spark, for Spark SQL and DataFrames.
 
