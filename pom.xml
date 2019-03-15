@@ -21,6 +21,13 @@
         <name>NetEase Corp.</name>
         <url>https://bigdata.163yun.com/mammut</url>
     </organization>
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>manual</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <postgresql.ver>9.3-1102-jdbc41</postgresql.ver>
