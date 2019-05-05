@@ -86,6 +86,7 @@ class DefaultSource
         }
       } else {
         createTable(conn, df, options)
+        copyToGreenplum(df, df.schema, options)
       }
     } finally {
       conn.close()
