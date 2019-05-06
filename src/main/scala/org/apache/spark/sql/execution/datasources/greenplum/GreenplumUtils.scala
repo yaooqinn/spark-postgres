@@ -76,13 +76,46 @@ object GreenplumUtils extends Logging {
       val values = new Array[String](schema.length)
       while (i < schema.length) {
         if (!row.isNullAt(i)) {
-          values(i) = valueConverters(i).apply(row, i)
+          values(i) = convertStr(valueConverters(i).apply(row, i))
         } else {
           values(i) = "NULL"
         }
         i += 1
       }
-      (values.mkString(options.delimiter) + "\n").getBytes()
+      (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
+    }
+
+    def convertStr(str: String): String = {
+      assert(options.delimiter.length == 1, "The delimiter should be a single character.")
+      val delimiter = options.delimiter.charAt(0)
+      if (str.contains('\\') || str.contains('\n') || str.contains(delimiter)
+        || str.contains('\r')) {
+        val sb = new StringBuffer(str)
+        var i = 0
+        while (i < sb.length()) {
+          val char = sb.charAt(i)
+          if (char == '\\') {
+            sb.insert(i, '\\')
+            i += 2
+          } else if (char == '\n') {
+            sb.delete(i, i + 1)
+            sb.insert(i, "\\n")
+            i += 2
+          } else if (char == '\r') {
+            sb.delete(i, i + 1)
+            sb.insert(i, "\\r")
+            i += 2
+          } else if (char == delimiter) {
+            sb.insert(i, "\\")
+            i += 2
+          } else {
+            i += 1
+          }
+        }
+        sb.toString
+      } else {
+        str
+      }
     }
 
     df.foreachPartition { rows =>
