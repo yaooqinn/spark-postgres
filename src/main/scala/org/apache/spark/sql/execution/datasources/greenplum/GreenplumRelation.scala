@@ -80,7 +80,6 @@ private[sql] case class GreenplumRelation(
       createTable(conn, data, options)
       copyToGreenplum(data, schema, options)
     }
-    data.toLocalIterator()
   }
 
   override def toString: String = {
