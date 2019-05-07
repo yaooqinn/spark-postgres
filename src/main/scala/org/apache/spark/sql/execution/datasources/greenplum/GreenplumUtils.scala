@@ -88,34 +88,12 @@ object GreenplumUtils extends Logging {
     def convertValue(str: String): String = {
       assert(options.delimiter.length == 1, "The delimiter should be a single character.")
       val delimiter = options.delimiter.charAt(0)
-      if (str.contains('\\') || str.contains('\n') || str.contains(delimiter)
-        || str.contains('\r')) {
-        val sb = new StringBuffer(str)
-        var i = 0
-        while (i < sb.length()) {
-          val char = sb.charAt(i)
-          char match {
-            case '\\' =>
-              sb.insert(i, '\\')
-              i += 2
-            case '\n' =>
-              sb.delete(i, i + 1)
-              sb.insert(i, "\\n")
-              i += 2
-            case '\r' =>
-              sb.delete(i, i + 1)
-              sb.insert(i, "\\r")
-              i += 2
-            case `delimiter` =>
-              sb.insert(i, "\\")
-              i += 2
-            case _ =>
-              i += 1
-          }
-        }
-        sb.toString
-      } else {
-        str
+      str.flatMap {
+        case '\\' => "\\\\"
+        case '\n' => "\\n"
+        case '\r' => "\\r"
+        case `delimiter` => s"\\$delimiter"
+        case c => s"$c"
       }
     }
 
