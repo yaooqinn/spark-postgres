@@ -17,15 +17,50 @@
 
 package org.apache.spark.sql.execution.datasources.greenplum
 
+import java.io.File
+import java.sql.DriverManager
 import java.util.TimeZone
 
+import io.airlift.testing.postgresql.TestingPostgreSqlServer
+
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.types._
+import org.apache.spark.util.Utils
 
 class GreenplumUtilsSuite extends SparkFunSuite {
   val timeZoneId: String = TimeZone.getDefault.getID
+
+  var postgres: TestingPostgreSqlServer = _
+  var url: String = _
+  var sparkSession: SparkSession = _
+  var tempDir: File = _
+
+  override def beforeAll(): Unit = {
+    tempDir = Utils.createTempDir()
+    postgres = new TestingPostgreSqlServer("gptest", "gptest")
+    url = postgres.getJdbcUrl
+    sparkSession = SparkSession.builder()
+      .config("spark.master", "local")
+      .config("spark.app.name", "testGp")
+      .config("spark.sql.warehouse.dir", s"${tempDir.getAbsolutePath}/warehouse")
+      .config("spark.local.dir", s"${tempDir.getAbsolutePath}/local")
+      .getOrCreate()
+  }
+
+  override def afterAll(): Unit = {
+    try {
+      if (postgres != null) {
+        postgres.close()
+      }
+      if (sparkSession != null) {
+        sparkSession.stop()
+      }
+    } finally {
+      Utils.deleteRecursively(tempDir)
+    }
+  }
 
   ignore("make converter") {
     val options = GreenplumOptions(CaseInsensitiveMap(
@@ -92,5 +127,36 @@ class GreenplumUtilsSuite extends SparkFunSuite {
       GreenplumUtils.makeConverter(
         StructType(Array(StructField("a", IntegerType), StructField("b", StringType))), options)
     assert(structConverter(row1, 14) === "{\"a\":14,\"b\":15}")
+  }
+
+  test("test copy to greenplum with postgres") {
+    // scalastyle:off
+    val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
+      5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+    // scalastyle:on
+    val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
+    val df = sparkSession.createDataFrame(rdd)
+    val conn = DriverManager.getConnection(url)
+    val tblname = "gptbl"
+    try {
+      val stat1 = conn.createStatement()
+      stat1.execute(s"create table $tblname(_1 Int, _2 text)")
+      val schema = new StructType().add("_1", IntegerType).add("_2", StringType)
+
+      val parameters = CaseInsensitiveMap(Map("url" -> s"$url", "dbtable" -> s"$tblname"))
+      GreenplumUtils.copyToGreenplum(df, schema, GreenplumOptions(parameters, timeZoneId))
+
+      val stat2 = conn.createStatement()
+      stat2.executeQuery(s"select * from $tblname")
+      stat2.setFetchSize(kvs.size)
+      val result = stat2.getResultSet
+      while (result.next()) {
+        val k = result.getInt(1)
+        val v = result.getString(2)
+        assert(kvs.get(k).get === v)
+      }
+    } finally {
+      conn.close()
+    }
   }
 }
