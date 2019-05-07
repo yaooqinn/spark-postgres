@@ -76,7 +76,7 @@ object GreenplumUtils extends Logging {
       val values = new Array[String](schema.length)
       while (i < schema.length) {
         if (!row.isNullAt(i)) {
-          values(i) = convertStr(valueConverters(i).apply(row, i))
+          values(i) = convertValue(valueConverters(i).apply(row, i))
         } else {
           values(i) = "NULL"
         }
@@ -85,7 +85,7 @@ object GreenplumUtils extends Logging {
       (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
     }
 
-    def convertStr(str: String): String = {
+    def convertValue(str: String): String = {
       assert(options.delimiter.length == 1, "The delimiter should be a single character.")
       val delimiter = options.delimiter.charAt(0)
       if (str.contains('\\') || str.contains('\n') || str.contains(delimiter)
@@ -94,22 +94,23 @@ object GreenplumUtils extends Logging {
         var i = 0
         while (i < sb.length()) {
           val char = sb.charAt(i)
-          if (char == '\\') {
-            sb.insert(i, '\\')
-            i += 2
-          } else if (char == '\n') {
-            sb.delete(i, i + 1)
-            sb.insert(i, "\\n")
-            i += 2
-          } else if (char == '\r') {
-            sb.delete(i, i + 1)
-            sb.insert(i, "\\r")
-            i += 2
-          } else if (char == delimiter) {
-            sb.insert(i, "\\")
-            i += 2
-          } else {
-            i += 1
+          char match {
+            case '\\' =>
+              sb.insert(i, '\\')
+              i += 2
+            case '\n' =>
+              sb.delete(i, i + 1)
+              sb.insert(i, "\\n")
+              i += 2
+            case '\r' =>
+              sb.delete(i, i + 1)
+              sb.insert(i, "\\r")
+              i += 2
+            case `delimiter` =>
+              sb.insert(i, "\\")
+              i += 2
+            case _ =>
+              i += 1
           }
         }
         sb.toString
