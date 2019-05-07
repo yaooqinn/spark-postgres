@@ -19,10 +19,12 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io._
 import java.nio.charset.StandardCharsets
+import java.sql.{Connection, SQLException}
 import java.util.UUID
 
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
+import scala.util.control.NonFatal
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
@@ -86,8 +88,61 @@ object GreenplumUtils extends Logging {
     }
 
     df.foreachPartition { rows =>
-      val conn = JdbcUtils.createConnectionFactory(options)()
-      val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+      copyPartition(rows, convertRow, options)
+    }
+  }
+
+  /**
+   * Copy a partition of a DataFrame to the GreenPlum.  This is done in
+   * a single database transaction (unless isolation level is "NONE")
+   * in order to avoid repeatedly inserting data as much as possible.
+   *
+   * It is still theoretically possible for rows in a DataFrame to be
+   * inserted into the database more than once if a stage somehow fails after
+   * the commit occurs but before the stage can return successfully.
+   */
+  def copyPartition(
+      rows: Iterator[Row],
+      convertRow: Row => Array[Byte],
+      options: GreenplumOptions): Unit = {
+    val conn = JdbcUtils.createConnectionFactory(options)()
+    val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+
+    var commited = false
+    val isolationLevel = options.isolationLevel
+
+    var finalIsolationLevel = Connection.TRANSACTION_NONE
+    if (isolationLevel != Connection.TRANSACTION_NONE) {
+      try {
+        val metadata = conn.getMetaData
+        if (metadata.supportsTransactions()) {
+          // Update to at least use the default isolation, if any transaction level
+          // has been chosen and transactions are supported
+          val defaultIsolation = metadata.getDefaultTransactionIsolation
+          finalIsolationLevel = defaultIsolation
+          if (metadata.supportsTransactionIsolationLevel(isolationLevel)) {
+            // Finally update to actually requested level if possible
+            finalIsolationLevel = isolationLevel
+          } else {
+            logWarning(s"Requested isolation level $isolationLevel is not supported; " +
+              s"falling back to default isolation level $defaultIsolation")
+          }
+        } else {
+          logWarning(s"Requested isolation level $isolationLevel," +
+            s" but transactions are unsupported")
+        }
+      } catch {
+        case NonFatal(e) => logWarning("Exception while detecting transaction support", e)
+      }
+    }
+    val supportsTransactions = finalIsolationLevel != Connection.TRANSACTION_NONE
+
+    try {
+      if (supportsTransactions) {
+        conn.setAutoCommit(false)
+        conn.setTransactionIsolation(finalIsolationLevel)
+      }
+
       try {
         val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
         val dataFile = new File(tmpDir, UUID.randomUUID().toString)
@@ -107,11 +162,50 @@ object GreenplumUtils extends Logging {
           val end = System.nanoTime()
           logInfo(s"Copied $nums row(s) to Greenplum," +
             s" time taken: ${(end - start) / math.pow(10, 9)}s")
+          if (supportsTransactions) {
+            conn.commit()
+          }
+          commited = true
         } finally {
           in.close()
         }
+      } catch {
+        case e: SQLException =>
+          val cause = e.getNextException
+          if (cause != null && e.getCause != cause) {
+            // If there is no cause already, set 'next exception' as cause. If cause is null,
+            // it *may* be because no cause was set yet
+            if (e.getCause == null) {
+              try {
+                e.initCause(cause)
+              } catch {
+                // Or it may be null because the cause *was* explicitly initialized, to *null*,
+                // in which case this fails. There is no other way to detect it.
+                // addSuppressed in this case as well.
+                case _: IllegalStateException => e.addSuppressed(cause)
+              }
+            } else {
+              e.addSuppressed(cause)
+            }
+          }
+          throw e
       } finally {
-        conn.close()
+        if (commited) {
+          // The stage must fail.  We got here through an exception path, so
+          // let the exception through unless rollback() or close() want to
+          // tell the user about another problem.
+          if (supportsTransactions) {
+            conn.rollback()
+          }
+          conn.close()
+        } else {
+          // The stage must succeed.  We cannot propagate any exception close() might throw.
+          try {
+            conn.close()
+          } catch {
+            case e: Exception => logWarning("Transaction succeeded, but closing failed", e)
+          }
+        }
       }
     }
   }
