@@ -108,7 +108,7 @@ object GreenplumUtils extends Logging {
     val conn = JdbcUtils.createConnectionFactory(options)()
     val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
 
-    var commited = false
+    var committed = false
     val isolationLevel = options.isolationLevel
 
     var finalIsolationLevel = Connection.TRANSACTION_NONE
@@ -119,6 +119,7 @@ object GreenplumUtils extends Logging {
           // Update to at least use the default isolation, if any transaction level
           // has been chosen and transactions are supported
           val defaultIsolation = metadata.getDefaultTransactionIsolation
+          logDebug(s"The default isolation level of greenplum is $defaultIsolation.")
           finalIsolationLevel = defaultIsolation
           if (metadata.supportsTransactionIsolationLevel(isolationLevel)) {
             // Finally update to actually requested level if possible
@@ -165,7 +166,7 @@ object GreenplumUtils extends Logging {
           if (supportsTransactions) {
             conn.commit()
           }
-          commited = true
+          committed = true
         } finally {
           in.close()
         }
@@ -190,7 +191,7 @@ object GreenplumUtils extends Logging {
           }
           throw e
       } finally {
-        if (commited) {
+        if (committed) {
           // The stage must fail.  We got here through an exception path, so
           // let the exception through unless rollback() or close() want to
           // tell the user about another problem.
