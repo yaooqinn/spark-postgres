@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io._
 import java.nio.charset.StandardCharsets
+import java.sql.Connection
 import java.util.UUID
 
 import org.postgresql.copy.CopyManager
@@ -66,8 +67,13 @@ object GreenplumUtils extends Logging {
    * @param df the [[DataFrame]] will be copy to the Greenplum
    * @param schema the table schema in Greemnplum
    * @param options Options for the Greenplum data source
+   * @param isAppend whether append data to this gptable
    */
-  def copyToGreenplum(df: DataFrame, schema: StructType, options: GreenplumOptions): Unit = {
+  def copyToGreenplum(
+      df: DataFrame,
+      schema: StructType,
+      options: GreenplumOptions,
+      isAppend: Boolean): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
       schema.map(s => makeConverter(s.dataType, options)).toArray
 
@@ -97,9 +103,28 @@ object GreenplumUtils extends Logging {
       }
     }
 
-    df.foreachPartition { rows =>
+    var finalDf = df
+    if (isAppend) {
+      // TODO: For the case, which should append data to table, is there more efficient method?
+      finalDf = df.coalesce(1)
+    }
+
+    val partNum = finalDf.rdd.getNumPartitions
+    val accumulator = finalDf.sparkSession.sparkContext.longAccumulator("copySuccess")
+    val randomString = UUID.randomUUID().toString.flatMap {
+      case '-' => ""
+      case c => s"$c"
+    }
+
+    var tempTable = options.table + randomString
+    if (isAppend) {
+      tempTable = options.table
+    }
+    val strSchema = JdbcUtils.schemaString(finalDf, options.url, options.createTableColumnTypes)
+    finalDf.foreachPartition { rows =>
       val conn = JdbcUtils.createConnectionFactory(options)()
       val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+      var committed = false
       try {
         val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
         val dataFile = new File(tmpDir, UUID.randomUUID().toString)
@@ -110,7 +135,12 @@ object GreenplumUtils extends Logging {
           out.close()
         }
         val in = new BufferedInputStream(new FileInputStream(dataFile))
-        val sql = s"COPY ${options.table}" +
+
+        val createTblSql = s"CREATE TABLE IF NOT EXISTS $tempTable ($strSchema)" +
+          s" ${options.createTableOptions}"
+        executeStatement(conn, createTblSql)
+
+        val sql = s"COPY $tempTable" +
           s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
         try {
           logInfo("Start copy steam to Greenplum")
@@ -119,12 +149,70 @@ object GreenplumUtils extends Logging {
           val end = System.nanoTime()
           logInfo(s"Copied $nums row(s) to Greenplum," +
             s" time taken: ${(end - start) / math.pow(10, 9)}s")
+          committed = true
+          accumulator.add(1L)
         } finally {
           in.close()
         }
       } finally {
+        if (!committed) {
+          if (!isAppend) {
+            val sql = s"DROP TABLE IF EXISTS $tempTable"
+            executeStatement(conn, sql)
+          }
+          conn.close()
+        } else {
+          try {
+            conn.close()
+          } catch {
+            case e: Exception => logWarning("Transaction succeeded, but closing failed", e)
+          }
+        }
+      }
+    }
+
+    if (accumulator.value == partNum) {
+      if (!isAppend) {
+        var committed = false
+        val conn = JdbcUtils.createConnectionFactory(options)()
+        try {
+          val dropTableSql = s"DROP TABLE IF EXISTS ${options.table}"
+          executeStatement(conn, dropTableSql)
+
+          val renameTableSql = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
+          committed = executeStatement(conn, renameTableSql)
+        } finally {
+          if (!committed) {
+            val sql = s"DROP TABLE IF EXISTS $tempTable"
+            executeStatement(conn, sql)
+            conn.close()
+          } else {
+            // The stage must succeed.  We cannot propagate any exception close() might throw.
+            try {
+              conn.close()
+            } catch {
+              case e: Exception => logWarning("Transaction succeeded, but closing failed", e)
+            }
+          }
+        }
+      }
+    } else {
+      if (!isAppend) {
+        val conn = JdbcUtils.createConnectionFactory(options)()
+        val sql = s"DROP TABLE IF EXISTS $tempTable"
+        executeStatement(conn, sql)
         conn.close()
       }
+    }
+  }
+
+  def executeStatement(conn: Connection, sql: String): Boolean = {
+    val statement = conn.createStatement()
+    try {
+      statement.executeUpdate(sql)
+      true
+    } finally {
+      statement.close()
     }
   }
 }

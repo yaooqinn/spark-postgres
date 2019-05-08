@@ -26,6 +26,7 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
+import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
 import org.apache.spark.util.Utils
 
@@ -138,23 +139,51 @@ class GreenplumUtilsSuite extends SparkFunSuite {
     val df = sparkSession.createDataFrame(rdd)
     val conn = DriverManager.getConnection(url)
     val tblname = "gptbl"
+    val parameters = CaseInsensitiveMap(Map("url" -> s"$url", "dbtable" -> s"$tblname"))
+    val options = GreenplumOptions(parameters, timeZoneId)
+
     try {
       val stat1 = conn.createStatement()
-      stat1.execute(s"create table $tblname(_1 Int, _2 text)")
-      val schema = new StructType().add("_1", IntegerType).add("_2", StringType)
+      val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
+      stat1.execute(s"create table $tblname($strSchema)")
 
-      val parameters = CaseInsensitiveMap(Map("url" -> s"$url", "dbtable" -> s"$tblname"))
-      GreenplumUtils.copyToGreenplum(df, schema, GreenplumOptions(parameters, timeZoneId))
-
+      GreenplumUtils.copyToGreenplum(df, df.schema, options, false)
       val stat2 = conn.createStatement()
       stat2.executeQuery(s"select * from $tblname")
-      stat2.setFetchSize(kvs.size)
-      val result = stat2.getResultSet
-      while (result.next()) {
-        val k = result.getInt(1)
-        val v = result.getString(2)
+      stat2.setFetchSize(kvs.size + 1)
+      var count = 0
+      val result2 = stat2.getResultSet
+      while (result2.next()) {
+        val k = result2.getInt(1)
+        val v = result2.getString(2)
+        count += 1
         assert(kvs.get(k).get === v)
       }
+      assert(count === kvs.size)
+
+      // Append the df's data to gptbl, so the size will double.
+      GreenplumUtils.copyToGreenplum(df, df.schema, options, true)
+      val stat3 = conn.createStatement()
+      stat3.executeQuery(s"select * from $tblname")
+      stat3.setFetchSize(kvs.size * 2 + 1)
+      val result3 = stat3.getResultSet
+      count = 0
+      while (result3.next()) {
+        count += 1
+      }
+      assert(count === kvs.size * 2)
+
+      // Overwrite gptbl with df's data.
+      GreenplumUtils.copyToGreenplum(df, df.schema, options, false)
+      val stat4 = conn.createStatement()
+      stat4.executeQuery(s"select * from $tblname")
+      stat4.setFetchSize(kvs.size + 1)
+      val result4 = stat4.getResultSet
+      count = 0
+      while (result4.next()) {
+        count += 1
+      }
+      assert(count === kvs.size)
     } finally {
       conn.close()
     }
