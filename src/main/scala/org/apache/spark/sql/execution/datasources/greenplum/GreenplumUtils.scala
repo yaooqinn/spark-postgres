@@ -76,13 +76,25 @@ object GreenplumUtils extends Logging {
       val values = new Array[String](schema.length)
       while (i < schema.length) {
         if (!row.isNullAt(i)) {
-          values(i) = valueConverters(i).apply(row, i)
+          values(i) = convertValue(valueConverters(i).apply(row, i))
         } else {
           values(i) = "NULL"
         }
         i += 1
       }
-      (values.mkString(options.delimiter) + "\n").getBytes()
+      (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
+    }
+
+    def convertValue(str: String): String = {
+      assert(options.delimiter.length == 1, "The delimiter should be a single character.")
+      val delimiter = options.delimiter.charAt(0)
+      str.flatMap {
+        case '\\' => "\\\\"
+        case '\n' => "\\n"
+        case '\r' => "\\r"
+        case `delimiter` => s"\\$delimiter"
+        case c => s"$c"
+      }
     }
 
     df.foreachPartition { rows =>

@@ -80,6 +80,13 @@
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/io.airlift/testing-postgresql-server -->
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>testing-postgresql-server</artifactId>
+            <version>9.6.3-3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <outputDirectory>target/scala-${scala.binary.ver}/classes</outputDirectory>
