@@ -31,7 +31,7 @@ import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{LongAccumulator, Utils}
 
 object GreenplumUtils extends Logging {
 
@@ -61,148 +61,148 @@ object GreenplumUtils extends Logging {
     case _ => (row: Row, ordinal: Int) => row.get(ordinal).toString
   }
 
+  def convertRow(
+      row: Row,
+      schema: StructType,
+      options: GreenplumOptions,
+      valueConverters: Array[(Row, Int) => String]): Array[Byte] = {
+    var i = 0
+    val values = new Array[String](schema.length)
+    while (i < schema.length) {
+      if (!row.isNullAt(i)) {
+        values(i) = convertValue(valueConverters(i).apply(row, i), options)
+      } else {
+        values(i) = "NULL"
+      }
+      i += 1
+    }
+    (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
+  }
+
+  def convertValue(str: String, options: GreenplumOptions): String = {
+    assert(options.delimiter.length == 1, "The delimiter should be a single character.")
+    val delimiter = options.delimiter.charAt(0)
+    str.flatMap {
+      case '\\' => "\\\\"
+      case '\n' => "\\n"
+      case '\r' => "\\r"
+      case `delimiter` => s"\\$delimiter"
+      case c => s"$c"
+    }
+  }
+
   /**
    * https://www.postgresql.org/docs/9.2/sql-copy.html
+   *
+   * Copy data to greenplum and append to relative gptable.
    *
    * @param df the [[DataFrame]] will be copy to the Greenplum
    * @param schema the table schema in Greemnplum
    * @param options Options for the Greenplum data source
-   * @param isAppend whether append data to this gptable
    */
-  def copyToGreenplum(
+  def copyAppendToGreenplum(
       df: DataFrame,
       schema: StructType,
-      options: GreenplumOptions,
-      isAppend: Boolean): Unit = {
-    val valueConverters: Array[(Row, Int) => String] =
-      schema.map(s => makeConverter(s.dataType, options)).toArray
-
-    def convertRow(row: Row): Array[Byte] = {
-      var i = 0
-      val values = new Array[String](schema.length)
-      while (i < schema.length) {
-        if (!row.isNullAt(i)) {
-          values(i) = convertValue(valueConverters(i).apply(row, i))
-        } else {
-          values(i) = "NULL"
-        }
-        i += 1
-      }
-      (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
+      options: GreenplumOptions): Unit = {
+    df.foreachPartition { rows =>
+      copyParition(rows, options, schema, options.table)
     }
+  }
 
-    def convertValue(str: String): String = {
-      assert(options.delimiter.length == 1, "The delimiter should be a single character.")
-      val delimiter = options.delimiter.charAt(0)
-      str.flatMap {
-        case '\\' => "\\\\"
-        case '\n' => "\\n"
-        case '\r' => "\\r"
-        case `delimiter` => s"\\$delimiter"
-        case c => s"$c"
-      }
-    }
-
-    var finalDf = df
-    if (isAppend) {
-      // TODO: For the case, which should append data to table, is there more efficient method?
-      finalDf = df.coalesce(1)
-    }
-
-    val partNum = finalDf.rdd.getNumPartitions
-    val accumulator = finalDf.sparkSession.sparkContext.longAccumulator("copySuccess")
+  /**
+   * https://www.postgresql.org/docs/9.2/sql-copy.html
+   *
+   * Copy data to greenplum and overwrite relative gptable,
+   * which can be dropped or does not exist.
+   *
+   * @param df the [[DataFrame]] will be copy to the Greenplum
+   * @param schema the table schema in Greemnplum
+   * @param options Options for the Greenplum data source
+   */
+  def copyOverwriteToGreenplum(
+      df: DataFrame,
+      schema: StructType,
+      options: GreenplumOptions): Unit = {
     val randomString = UUID.randomUUID().toString.flatMap {
       case '-' => ""
       case c => s"$c"
     }
+    val tempTable = s"sparkGpTmp$randomString"
+    val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
+    val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
-    var tempTable = options.table + randomString
-    if (isAppend) {
-      tempTable = options.table
+    val conn = JdbcUtils.createConnectionFactory(options)()
+
+    try {
+      executeStatement(conn, createTempTbl)
+      val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
+      val partNum = df.rdd.getNumPartitions
+
+      df.foreachPartition { rows =>
+        copyParition(rows, options, schema, tempTable, accumulator)
+      }
+
+      if (accumulator.value == partNum) {
+        val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
+        executeStatement(conn, dropTbl)
+
+        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
+        executeStatement(conn, renameTempTbl)
+      } else {
+        val dropTempTbl = s"DROP TABLE $tempTable"
+        executeStatement(conn, dropTempTbl)
+      }
+    } finally {
+      closeConnSilent(conn)
     }
-    val strSchema = JdbcUtils.schemaString(finalDf, options.url, options.createTableColumnTypes)
-    finalDf.foreachPartition { rows =>
-      val conn = JdbcUtils.createConnectionFactory(options)()
-      val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
-      var committed = false
+  }
+
+  def copyParition(
+      rows: Iterator[Row],
+      options: GreenplumOptions,
+      schema: StructType,
+      tableName: String,
+      accumulator: LongAccumulator = null): Unit = {
+    val valueConverters: Array[(Row, Int) => String] =
+      schema.map(s => makeConverter(s.dataType, options)).toArray
+    val conn = JdbcUtils.createConnectionFactory(options)()
+    val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+
+    try {
+      val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
+      val dataFile = new File(tmpDir, UUID.randomUUID().toString)
+      val out = new BufferedOutputStream(new FileOutputStream(dataFile))
       try {
-        val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
-        val dataFile = new File(tmpDir, UUID.randomUUID().toString)
-        val out = new BufferedOutputStream(new FileOutputStream(dataFile))
-        try {
-          rows.foreach(r => out.write(convertRow(r)))
-        } finally {
-          out.close()
-        }
-        val in = new BufferedInputStream(new FileInputStream(dataFile))
-
-        val createTblSql = s"CREATE TABLE IF NOT EXISTS $tempTable ($strSchema)" +
-          s" ${options.createTableOptions}"
-        executeStatement(conn, createTblSql)
-
-        val sql = s"COPY $tempTable" +
-          s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
-        try {
-          logInfo("Start copy steam to Greenplum")
-          val start = System.nanoTime()
-          val nums = copyManager.copyIn(sql, in)
-          val end = System.nanoTime()
-          logInfo(s"Copied $nums row(s) to Greenplum," +
-            s" time taken: ${(end - start) / math.pow(10, 9)}s")
-          committed = true
+        rows.foreach(r => out.write(convertRow(r, schema, options, valueConverters)))
+      } finally {
+        out.close()
+      }
+      val in = new BufferedInputStream(new FileInputStream(dataFile))
+      val sql = s"COPY $tableName" +
+        s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
+      try {
+        logInfo("Start copy steam to Greenplum")
+        val start = System.nanoTime()
+        val nums = copyManager.copyIn(sql, in)
+        val end = System.nanoTime()
+        logInfo(s"Copied $nums row(s) to Greenplum," +
+          s" time taken: ${(end - start) / math.pow(10, 9)}s")
+        if (accumulator != null) {
           accumulator.add(1L)
-        } finally {
-          in.close()
         }
       } finally {
-        if (!committed) {
-          if (!isAppend) {
-            val sql = s"DROP TABLE IF EXISTS $tempTable"
-            executeStatement(conn, sql)
-          }
-          conn.close()
-        } else {
-          try {
-            conn.close()
-          } catch {
-            case e: Exception => logWarning("Transaction succeeded, but closing failed", e)
-          }
-        }
+        in.close()
       }
+    } finally {
+      closeConnSilent(conn)
     }
+  }
 
-    if (accumulator.value == partNum) {
-      if (!isAppend) {
-        var committed = false
-        val conn = JdbcUtils.createConnectionFactory(options)()
-        try {
-          val dropTableSql = s"DROP TABLE IF EXISTS ${options.table}"
-          executeStatement(conn, dropTableSql)
-
-          val renameTableSql = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
-          committed = executeStatement(conn, renameTableSql)
-        } finally {
-          if (!committed) {
-            val sql = s"DROP TABLE IF EXISTS $tempTable"
-            executeStatement(conn, sql)
-            conn.close()
-          } else {
-            // The stage must succeed.  We cannot propagate any exception close() might throw.
-            try {
-              conn.close()
-            } catch {
-              case e: Exception => logWarning("Transaction succeeded, but closing failed", e)
-            }
-          }
-        }
-      }
-    } else {
-      if (!isAppend) {
-        val conn = JdbcUtils.createConnectionFactory(options)()
-        val sql = s"DROP TABLE IF EXISTS $tempTable"
-        executeStatement(conn, sql)
-        conn.close()
-      }
+  def closeConnSilent(conn: Connection): Unit = {
+    try {
+      conn.close()
+    } catch {
+      case e: Exception => logWarning("Exception occured when closing connection.", e)
     }
   }
 

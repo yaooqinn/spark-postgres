@@ -25,6 +25,7 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
@@ -130,7 +131,7 @@ class GreenplumUtilsSuite extends SparkFunSuite {
     assert(structConverter(row1, 14) === "{\"a\":14,\"b\":15}")
   }
 
-  test("test copy to greenplum with postgres") {
+  test("test copy to greenplum") {
     // scalastyle:off
     val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
       5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
@@ -147,7 +148,7 @@ class GreenplumUtilsSuite extends SparkFunSuite {
       val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
       stat1.execute(s"create table $tblname($strSchema)")
 
-      GreenplumUtils.copyToGreenplum(df, df.schema, options, false)
+      GreenplumUtils.copyOverwriteToGreenplum(df, df.schema, options)
       val stat2 = conn.createStatement()
       stat2.executeQuery(s"select * from $tblname")
       stat2.setFetchSize(kvs.size + 1)
@@ -162,7 +163,7 @@ class GreenplumUtilsSuite extends SparkFunSuite {
       assert(count === kvs.size)
 
       // Append the df's data to gptbl, so the size will double.
-      GreenplumUtils.copyToGreenplum(df, df.schema, options, true)
+      GreenplumUtils.copyAppendToGreenplum(df, df.schema, options)
       val stat3 = conn.createStatement()
       stat3.executeQuery(s"select * from $tblname")
       stat3.setFetchSize(kvs.size * 2 + 1)
@@ -174,7 +175,7 @@ class GreenplumUtilsSuite extends SparkFunSuite {
       assert(count === kvs.size * 2)
 
       // Overwrite gptbl with df's data.
-      GreenplumUtils.copyToGreenplum(df, df.schema, options, false)
+      GreenplumUtils.copyOverwriteToGreenplum(df, df.schema, options)
       val stat4 = conn.createStatement()
       stat4.executeQuery(s"select * from $tblname")
       stat4.setFetchSize(kvs.size + 1)
@@ -185,7 +186,55 @@ class GreenplumUtilsSuite extends SparkFunSuite {
       }
       assert(count === kvs.size)
     } finally {
-      conn.close()
+      GreenplumUtils.closeConnSilent(conn)
+    }
+  }
+
+  test("test covert value and row") {
+    val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "test"))
+    val options = GreenplumOptions(paras, timeZoneId)
+    val value = "test\t\rtest\n\\n\\,"
+    assert(GreenplumUtils.convertValue(value, options) === "test\\\t\\rtest\\n\\\\n\\\\,")
+
+    val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
+    val schema = new StructType().add("c1", StringType).add("c2", StringType).add("c3", StringType)
+      .add("c4", StringType).add("c5", StringType).add("c6", StringType)
+    val valueConverters: Array[(Row, Int) => String] =
+      schema.map(s => GreenplumUtils.makeConverter(s.dataType, options)).toArray
+
+    val row = new GenericRow(values)
+    val str = GreenplumUtils.convertRow(row, schema, options, valueConverters)
+    assert(str === "\\n\t\\\t\t,\t\\r\t\\\\\t\\\\n\n".getBytes("utf-8"))
+  }
+
+  test("test copy partition") {
+    val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "test"))
+    val options = GreenplumOptions(paras, timeZoneId)
+    val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
+    val schema = new StructType().add("c1", StringType).add("c2", StringType).add("c3", StringType)
+      .add("c4", StringType).add("c5", StringType).add("c6", StringType)
+    val rows = Array(new GenericRow(values)).toIterator
+    val tempTblName = "temp"
+
+    val conn = JdbcUtils.createConnectionFactory(options)()
+    try {
+      val strSchema = "c1 text,c2 text,c3 text,c4 text,c5 text,c6 text"
+      val createTempTbl = s"CREATE TABLE $tempTblName ($strSchema)"
+      GreenplumUtils.executeStatement(conn, createTempTbl)
+
+      GreenplumUtils.copyParition(rows, options, schema, tempTblName)
+
+      val stat = conn.createStatement()
+      val sql = s"SELECT * FROM $tempTblName"
+      stat.executeQuery(sql)
+      val result = stat.getResultSet
+      result.next()
+      for (i <- (0 until values.size)) {
+        assert(result.getObject(i + 1) === values(i))
+      }
+      assert(!result.next())
+    } finally {
+      GreenplumUtils.closeConnSilent(conn)
     }
   }
 }

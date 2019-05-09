@@ -63,19 +63,25 @@ private[sql] case class GreenplumRelation(
 
   override def insert(data: DataFrame, overwrite: Boolean): Unit = {
     val conn = createConnectionFactory(options)()
-    if (tableExists(conn, options)) {
-      if (overwrite) {
-        if (options.isTruncate && isCascadingTruncateTable(options.url).contains(false)) {
-          truncateTable(conn, options)
-          copyToGreenplum(data, schema, options, true)
+    try {
+      if (tableExists(conn, options)) {
+        if (overwrite) {
+          if (options.isTruncate && isCascadingTruncateTable(options.url).contains(false)) {
+            truncateTable(conn, options)
+            val finaldata = data.coalesce(1)
+            copyAppendToGreenplum(finaldata, schema, options)
+          } else {
+            copyOverwriteToGreenplum(data, schema, options)
+          }
         } else {
-          copyToGreenplum(data, schema, options, false)
+          val finaldata = data.coalesce(1)
+          copyAppendToGreenplum(finaldata, schema, options)
         }
       } else {
-        copyToGreenplum(data, schema, options, true)
+        copyOverwriteToGreenplum(data, schema, options)
       }
-    } else {
-      copyToGreenplum(data, schema, options, false)
+    } finally {
+      closeConnSilent(conn)
     }
   }
 
