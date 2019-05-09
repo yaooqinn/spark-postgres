@@ -68,9 +68,10 @@ object GreenplumUtils extends Logging {
       valueConverters: Array[(Row, Int) => String]): Array[Byte] = {
     var i = 0
     val values = new Array[String](schema.length)
+    val delimiter = options.delimiter.charAt(0)
     while (i < schema.length) {
       if (!row.isNullAt(i)) {
-        values(i) = convertValue(valueConverters(i).apply(row, i), options)
+        values(i) = convertValue(valueConverters(i).apply(row, i), delimiter)
       } else {
         values(i) = "NULL"
       }
@@ -79,9 +80,7 @@ object GreenplumUtils extends Logging {
     (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
   }
 
-  def convertValue(str: String, options: GreenplumOptions): String = {
-    assert(options.delimiter.length == 1, "The delimiter should be a single character.")
-    val delimiter = options.delimiter.charAt(0)
+  def convertValue(str: String, delimiter: Char): String = {
     str.flatMap {
       case '\\' => "\\\\"
       case '\n' => "\\n"

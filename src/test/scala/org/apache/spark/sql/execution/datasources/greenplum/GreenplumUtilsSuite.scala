@@ -194,7 +194,7 @@ class GreenplumUtilsSuite extends SparkFunSuite {
     val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "test"))
     val options = GreenplumOptions(paras, timeZoneId)
     val value = "test\t\rtest\n\\n\\,"
-    assert(GreenplumUtils.convertValue(value, options) === "test\\\t\\rtest\\n\\\\n\\\\,")
+    assert(GreenplumUtils.convertValue(value, '\t') === "test\\\t\\rtest\\n\\\\n\\\\,")
 
     val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
     val schema = new StructType().add("c1", StringType).add("c2", StringType).add("c3", StringType)

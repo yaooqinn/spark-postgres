@@ -33,6 +33,7 @@ case class GreenplumOptions(
   extends JDBCOptions(params.updated("driver", "org.postgresql.Driver")) {
 
   val delimiter: String = params.getOrElse("delimiter", ",")
+  assert(delimiter.length == 1, "The delimiter should be a single character.")
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
 
