@@ -128,8 +128,13 @@ object GreenplumUtils extends Logging {
       } else {
         val dropTempTbl = s"DROP TABLE $tempTable"
         executeStatement(conn, dropTempTbl)
+
         throw new PartitionCopyFailureException(
-          s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
+          s"""
+          | Job aborted for that there are some partitions failed to copy data to greenPlum:
+          | Total partitions is: ${partNum}, and successful partitions is: ${accumulator.value}.
+          | You can retry again.
+          """.stripMargin)
       }
     } finally {
       closeConnSilent(conn)
