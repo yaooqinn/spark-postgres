@@ -42,6 +42,9 @@ case class GreenplumOptions(
    */
   val transactionOn: Boolean = params.getOrElse("transactionOn", "false").toBoolean
 
+  /** Max number of times we are allowed to retry dropTempTable operation. */
+  val dropTempTableMaxRetries: Int = 3
+
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
 
