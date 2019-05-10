@@ -217,7 +217,9 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
       GreenplumUtils.executeStatement(conn, createTbl)
 
-      GreenplumUtils.copyParition(rows, options, schema, tblname)
+      val accmulator = sparkSession.sparkContext.longAccumulator("test")
+
+      GreenplumUtils.copyParition(rows, options, schema, tblname, accmulator)
       val stat = conn.createStatement()
       val sql = s"SELECT * FROM $tblname"
       stat.executeQuery(sql)
@@ -248,7 +250,8 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       when(df.rdd).thenReturn(realdf.rdd)
 
       // This would touch an exception, gptable are not created and temp table would be removed
-      GreenplumUtils.copyOverwriteToGreenplum(df, schema, options)
+      intercept[PartitionCopyFailureException](
+        GreenplumUtils.copyOverwriteToGreenplum(df, schema, options))
 
       val showTables = "SELECT table_name FROM information_schema.tables"
       val stat = conn.createStatement()

@@ -173,7 +173,7 @@ object GreenplumUtils extends Logging {
       options: GreenplumOptions,
       schema: StructType,
       tableName: String,
-      accumulator: LongAccumulator = null): Unit = {
+      accumulator: LongAccumulator): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
       schema.map(s => makeConverter(s.dataType, options)).toArray
     val conn = JdbcUtils.createConnectionFactory(options)()
