@@ -111,11 +111,12 @@ object GreenplumUtils extends Logging {
     val partNum = finalDf.rdd.getNumPartitions
 
     finalDf.foreachPartition { rows =>
-      copyParition(rows, options, schema, options.table)
+      copyParition(rows, options, schema, options.table, accumulator)
     }
 
     if (accumulator.value != partNum) {
-      logError(s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
+      throw new PartitionCopyFailureException(
+        s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
     }
   }
 
@@ -157,9 +158,10 @@ object GreenplumUtils extends Logging {
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
         executeStatement(conn, renameTempTbl)
       } else {
-        logError(s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
         val dropTempTbl = s"DROP TABLE $tempTable"
         executeStatement(conn, dropTempTbl)
+        throw new PartitionCopyFailureException(
+          s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
       }
     } finally {
       closeConnSilent(conn)
@@ -196,9 +198,7 @@ object GreenplumUtils extends Logging {
         val end = System.nanoTime()
         logInfo(s"Copied $nums row(s) to Greenplum," +
           s" time taken: ${(end - start) / math.pow(10, 9)}s")
-        if (accumulator != null) {
-          accumulator.add(1L)
-        }
+        accumulator.add(1L)
       } finally {
         in.close()
       }
