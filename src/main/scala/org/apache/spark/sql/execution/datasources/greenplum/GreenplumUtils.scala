@@ -126,15 +126,21 @@ object GreenplumUtils extends Logging {
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
         executeStatement(conn, renameTempTbl)
       } else {
-        val dropTempTbl = s"DROP TABLE $tempTable"
-        executeStatement(conn, dropTempTbl)
-
-        throw new PartitionCopyFailureException(
-          s"""
-          | Job aborted for that there are some partitions failed to copy data to greenPlum:
-          | Total partitions is: ${partNum}, and successful partitions is: ${accumulator.value}.
-          | You can retry again.
-          """.stripMargin)
+        try {
+          val dropTempTbl = s"DROP TABLE $tempTable"
+          executeStatement(conn, dropTempTbl)
+        } catch {
+          case e: Exception =>
+            throw new Exception(s"Exception occured when dropping the temp table: $tempTable, " +
+              s"you can drop it manually.", e)
+        } finally {
+          throw new PartitionCopyFailureException(
+            s"""
+               | Job aborted for that there are some partitions failed to copy data to greenPlum:
+               | Total partitions is: ${partNum} and successful partitions is: ${accumulator.value}.
+               | You can retry again.
+            """.stripMargin)
+        }
       }
     } finally {
       closeConnSilent(conn)
