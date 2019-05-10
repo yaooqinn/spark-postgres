@@ -63,21 +63,20 @@ object GreenplumUtils extends Logging {
 
   def convertRow(
       row: Row,
-      schema: StructType,
-      options: GreenplumOptions,
+      length: Int,
+      delimiter: String,
       valueConverters: Array[(Row, Int) => String]): Array[Byte] = {
     var i = 0
-    val values = new Array[String](schema.length)
-    val delimiter = options.delimiter.charAt(0)
-    while (i < schema.length) {
+    val values = new Array[String](length)
+    while (i < length) {
       if (!row.isNullAt(i)) {
-        values(i) = convertValue(valueConverters(i).apply(row, i), delimiter)
+        values(i) = convertValue(valueConverters(i).apply(row, i), delimiter.charAt(0))
       } else {
         values(i) = "NULL"
       }
       i += 1
     }
-    (values.mkString(options.delimiter) + "\n").getBytes("UTF-8")
+    (values.mkString(delimiter) + "\n").getBytes("UTF-8")
   }
 
   def convertValue(str: String, delimiter: Char): String = {
@@ -184,7 +183,8 @@ object GreenplumUtils extends Logging {
       val dataFile = new File(tmpDir, UUID.randomUUID().toString)
       val out = new BufferedOutputStream(new FileOutputStream(dataFile))
       try {
-        rows.foreach(r => out.write(convertRow(r, schema, options, valueConverters)))
+        rows.foreach(r => out.write(
+          convertRow(r, schema.length, options.delimiter, valueConverters)))
       } finally {
         out.close()
       }

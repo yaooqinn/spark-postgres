@@ -200,7 +200,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         schema.map(s => GreenplumUtils.makeConverter(s.dataType, options)).toArray
 
       val row = new GenericRow(values)
-      val str = GreenplumUtils.convertRow(row, schema, options, valueConverters)
+      val str = GreenplumUtils.convertRow(row, schema.length, options.delimiter, valueConverters)
       assert(str === "\\n\t\\\t\t,\t\\r\t\\\\\t\\\\n\n".getBytes("utf-8"))
     }
   }
