@@ -21,9 +21,11 @@ import java.io._
 import java.nio.charset.StandardCharsets
 import java.sql.Connection
 import java.util.UUID
+import java.util.concurrent.{Callable, TimeoutException, TimeUnit}
 
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
+import scala.concurrent.Promise
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
@@ -211,15 +213,50 @@ object GreenplumUtils extends Logging {
       val in = new BufferedInputStream(new FileInputStream(dataFile))
       val sql = s"COPY $tableName" +
         s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
+
+      @volatile
+      var copyException: Option[Throwable] = None
+      val promisedCopyNums = Promise[Long]
+      val copyThread = new Thread("copy-to-gp-thread") {
+        override def run(): Unit = {
+          try {
+            promisedCopyNums.trySuccess {
+              copyManager.copyIn(sql, in)
+            }
+          } catch {
+            case e: Exception => copyException = Some(e)
+          }
+        }
+      }
+      val copyThreadChecker = new Callable[Boolean] {
+        val startTime = System.currentTimeMillis()
+        val timeout = TimeUnit.MINUTES.toMillis(options.copyTimeout)
+        override def call(): Boolean = {
+          copyException.isEmpty && System.currentTimeMillis() - startTime < timeout &&
+            !promisedCopyNums.isCompleted
+        }
+      }
+
       try {
         logInfo("Start copy steam to Greenplum")
         val start = System.nanoTime()
-        val nums = copyManager.copyIn(sql, in)
+        copyThread.start()
+        while (copyThreadChecker.call()) {
+          Thread.sleep(1000)
+        }
+        copyException.foreach(e => throw e)
+        if (!promisedCopyNums.isCompleted) {
+          throw new TimeoutException(s"The copy operation for copying data to greenplum has" +
+            s" been running for more then the timeout: ${options.copyTimeout} minutes.")
+        }
+        val nums = promisedCopyNums.future.value
         val end = System.nanoTime()
         logInfo(s"Copied $nums row(s) to Greenplum," +
           s" time taken: ${(end - start) / math.pow(10, 9)}s")
         accumulator.foreach(_.add(1L))
       } finally {
+        copyThread.interrupt()
+        copyThread.join()
         in.close()
       }
     } finally {

@@ -45,6 +45,10 @@ case class GreenplumOptions(
   /** Max number of times we are allowed to retry dropTempTable operation. */
   val dropTempTableMaxRetries: Int = 3
 
+  /** Timeout in minutes for copying a partition's data to greenplum. */
+  val copyTimeout = params.getOrElse("copyTimeout", "200").toInt
+  assert(copyTimeout > 0, "The copy timeout should be a positive number.")
+
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
 
