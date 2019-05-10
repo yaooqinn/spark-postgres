@@ -116,7 +116,7 @@ object GreenplumUtils extends Logging {
       val partNum = df.rdd.getNumPartitions
 
       df.foreachPartition { rows =>
-        copyPartition(rows, options, schema, tempTable, accumulator)
+        copyPartition(rows, options, schema, tempTable, Some(accumulator))
       }
 
       if (accumulator.value == partNum) {
@@ -178,7 +178,7 @@ object GreenplumUtils extends Logging {
       options: GreenplumOptions,
       schema: StructType,
       tableName: String,
-      accumulator: LongAccumulator = null): Unit = {
+      accumulator: Option[LongAccumulator] = None): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
       schema.map(s => makeConverter(s.dataType, options)).toArray
     val conn = JdbcUtils.createConnectionFactory(options)()
@@ -204,9 +204,7 @@ object GreenplumUtils extends Logging {
         val end = System.nanoTime()
         logInfo(s"Copied $nums row(s) to Greenplum," +
           s" time taken: ${(end - start) / math.pow(10, 9)}s")
-        if (accumulator != null) {
-          accumulator.add(1L)
-        }
+        accumulator.foreach(_.add(1L))
       } finally {
         in.close()
       }
