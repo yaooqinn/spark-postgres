@@ -35,7 +35,12 @@ case class GreenplumOptions(
   val delimiter: String = params.getOrElse("delimiter", ",")
   assert(delimiter.length == 1, "The delimiter should be a single character.")
 
-  val transactionForAppend: Boolean = params.getOrElse("transactionForAppend", "false").toBoolean
+  /**
+   * This option is only used for these cases:
+   * 1. overwrite a gptable, which is a CascadingTruncateTable.
+   * 2. append data to a gptable.
+   */
+  val transactionOn: Boolean = params.getOrElse("transactionOn", "false").toBoolean
 
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))

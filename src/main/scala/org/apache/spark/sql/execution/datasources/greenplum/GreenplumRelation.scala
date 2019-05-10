@@ -68,15 +68,17 @@ private[sql] case class GreenplumRelation(
         if (overwrite) {
           if (options.isTruncate && isCascadingTruncateTable(options.url).contains(false)) {
             truncateTable(conn, options)
-            copyAppendToGreenplum(data, schema, options)
+            nonTransactionalCopy(if (options.transactionOn) data.coalesce(1) else data,
+              schema, options)
           } else {
-            copyOverwriteToGreenplum(data, schema, options)
+            transactionalCopy(data, schema, options)
           }
         } else {
-          copyAppendToGreenplum(data, schema, options)
+          nonTransactionalCopy(if (options.transactionOn) data.coalesce(1) else data,
+            schema, options)
         }
       } else {
-        copyOverwriteToGreenplum(data, schema, options)
+        transactionalCopy(data, schema, options)
       }
     } finally {
       closeConnSilent(conn)

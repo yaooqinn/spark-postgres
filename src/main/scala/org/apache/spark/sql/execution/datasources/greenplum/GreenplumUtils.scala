@@ -92,44 +92,13 @@ object GreenplumUtils extends Logging {
   /**
    * https://www.postgresql.org/docs/9.2/sql-copy.html
    *
-   * Copy data to greenplum and append to relative gptable.
+   * Copy data to greenplum in a single transaction.
    *
    * @param df the [[DataFrame]] will be copy to the Greenplum
    * @param schema the table schema in Greemnplum
    * @param options Options for the Greenplum data source
    */
-  def copyAppendToGreenplum(
-      df: DataFrame,
-      schema: StructType,
-      options: GreenplumOptions): Unit = {
-    var finalDf = df
-    if (options.transactionForAppend) {
-      finalDf = df.coalesce(1)
-    }
-    val accumulator = finalDf.sparkSession.sparkContext.longAccumulator("copySuccess")
-    val partNum = finalDf.rdd.getNumPartitions
-
-    finalDf.foreachPartition { rows =>
-      copyParition(rows, options, schema, options.table, accumulator)
-    }
-
-    if (accumulator.value != partNum) {
-      throw new PartitionCopyFailureException(
-        s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
-    }
-  }
-
-  /**
-   * https://www.postgresql.org/docs/9.2/sql-copy.html
-   *
-   * Copy data to greenplum and overwrite relative gptable,
-   * which can be dropped or does not exist.
-   *
-   * @param df the [[DataFrame]] will be copy to the Greenplum
-   * @param schema the table schema in Greemnplum
-   * @param options Options for the Greenplum data source
-   */
-  def copyOverwriteToGreenplum(
+  def transactionalCopy(
       df: DataFrame,
       schema: StructType,
       options: GreenplumOptions): Unit = {
@@ -147,7 +116,7 @@ object GreenplumUtils extends Logging {
       val partNum = df.rdd.getNumPartitions
 
       df.foreachPartition { rows =>
-        copyParition(rows, options, schema, tempTable, accumulator)
+        copyPartition(rows, options, schema, tempTable, accumulator)
       }
 
       if (accumulator.value == partNum) {
@@ -167,12 +136,44 @@ object GreenplumUtils extends Logging {
     }
   }
 
-  def copyParition(
+  /**
+   * https://www.postgresql.org/docs/9.2/sql-copy.html
+   *
+   * Copy data to greenplum in these cases, which need update origin gptable.
+   * 1. Overwrite an existed gptable, which is a CascadingTruncateTable.
+   * 2. Append data to a gptable.
+   *
+   * When transcationOn option is true, we will coalesce the dataFrame to one partition,
+   * and the copy operation for each partition is atomic.
+   *
+   * @param df the [[DataFrame]] will be copy to the Greenplum
+   * @param schema the table schema in Greemnplum
+   * @param options Options for the Greenplum data source
+   */
+  def nonTransactionalCopy(
+      df: DataFrame,
+      schema: StructType,
+      options: GreenplumOptions): Unit = {
+    df.foreachPartition { rows =>
+      copyPartition(rows, options, schema, options.table)
+    }
+  }
+
+  /**
+   * Copy a partition's data to a gptable.
+   *
+   * @param rows rows of a partition will be copy to the Greenplum
+   * @param options Options for the Greenplum data source
+   * @param schema the table schema in Greemnplum
+   * @param tableName the tableName, to which the data will be copy
+   * @param accumulator account for recording the successful partition num
+   */
+  def copyPartition(
       rows: Iterator[Row],
       options: GreenplumOptions,
       schema: StructType,
       tableName: String,
-      accumulator: LongAccumulator): Unit = {
+      accumulator: LongAccumulator = null): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
       schema.map(s => makeConverter(s.dataType, options)).toArray
     val conn = JdbcUtils.createConnectionFactory(options)()
@@ -198,7 +199,9 @@ object GreenplumUtils extends Logging {
         val end = System.nanoTime()
         logInfo(s"Copied $nums row(s) to Greenplum," +
           s" time taken: ${(end - start) / math.pow(10, 9)}s")
-        accumulator.add(1L)
+        if (accumulator != null) {
+          accumulator.add(1L)
+        }
       } finally {
         in.close()
       }

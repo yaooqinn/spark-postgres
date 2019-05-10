@@ -147,7 +147,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
       stat1.execute(s"create table $tblname($strSchema)")
 
-      GreenplumUtils.copyOverwriteToGreenplum(df, df.schema, options)
+      GreenplumUtils.transactionalCopy(df, df.schema, options)
       val stat2 = conn.createStatement()
       stat2.executeQuery(s"select * from $tblname")
       stat2.setFetchSize(kvs.size + 1)
@@ -162,7 +162,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size)
 
       // Append the df's data to gptbl, so the size will double.
-      GreenplumUtils.copyAppendToGreenplum(df, df.schema, options)
+      GreenplumUtils.nonTransactionalCopy(df, df.schema, options)
       val stat3 = conn.createStatement()
       stat3.executeQuery(s"select * from $tblname")
       stat3.setFetchSize(kvs.size * 2 + 1)
@@ -174,7 +174,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size * 2)
 
       // Overwrite gptbl with df's data.
-      GreenplumUtils.copyOverwriteToGreenplum(df, df.schema, options)
+      GreenplumUtils.transactionalCopy(df, df.schema, options)
       val stat4 = conn.createStatement()
       stat4.executeQuery(s"select * from $tblname")
       stat4.setFetchSize(kvs.size + 1)
@@ -217,9 +217,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
       GreenplumUtils.executeStatement(conn, createTbl)
 
-      val accmulator = sparkSession.sparkContext.longAccumulator("test")
-
-      GreenplumUtils.copyParition(rows, options, schema, tblname, accmulator)
+      GreenplumUtils.copyPartition(rows, options, schema, tblname)
       val stat = conn.createStatement()
       val sql = s"SELECT * FROM $tblname"
       stat.executeQuery(sql)
@@ -238,7 +236,8 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
         5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
       // scalastyle:on
-      val tempPrefix = "sparkGpTmp"
+      // This suffix should be consisted with the suffix in transactionalCopy
+      val tempSuffix = "sparkGpTmp"
       val df = mock[DataFrame]
       val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
       val realdf = sparkSession.createDataFrame(rdd)
@@ -251,14 +250,14 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
       // This would touch an exception, gptable are not created and temp table would be removed
       intercept[PartitionCopyFailureException](
-        GreenplumUtils.copyOverwriteToGreenplum(df, schema, options))
+        GreenplumUtils.transactionalCopy(df, schema, options))
 
       val showTables = "SELECT table_name FROM information_schema.tables"
       val stat = conn.createStatement()
       val result = stat.executeQuery(showTables)
       while (result.next()) {
         val tbl = result.getString(1)
-        assert(tbl != tblname && !tbl.startsWith(tempPrefix))
+        assert(tbl != tblname && !tbl.endsWith(tempSuffix))
       }
     }
   }
@@ -266,7 +265,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
     val paras =
       CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest",
-      "transactionForAppend" -> "true"))
+      "transactionOn" -> "true"))
     val options = GreenplumOptions(paras, timeZoneId)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {

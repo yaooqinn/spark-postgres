@@ -77,19 +77,21 @@ class DefaultSource
             val tableSchema = getSchemaOption(conn, options)
             checkSchema(tableSchema, df.schema, isCaseSensitive)
             truncateTable(conn, options)
-            copyAppendToGreenplum(df, tableSchema.getOrElse(df.schema), options)
+            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
+              tableSchema.getOrElse(df.schema), options)
           case SaveMode.Overwrite =>
-            copyOverwriteToGreenplum(df, df.schema, options)
+            transactionalCopy(df, df.schema, options)
           case SaveMode.Append =>
             val tableSchema = getSchemaOption(conn, options)
             checkSchema(tableSchema, df.schema, isCaseSensitive)
-            copyAppendToGreenplum(df, tableSchema.getOrElse(df.schema), options)
+            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
+              tableSchema.getOrElse(df.schema), options)
           case SaveMode.ErrorIfExists =>
             throw new AnalysisException(s"Table or view '${options.table}' already exists. $mode")
           case SaveMode.Ignore => // do nothing
         }
       } else {
-        copyOverwriteToGreenplum(df, df.schema, options)
+        transactionalCopy(df, df.schema, options)
       }
     } finally {
       closeConnSilent(conn)
