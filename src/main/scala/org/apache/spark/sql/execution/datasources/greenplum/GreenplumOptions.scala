@@ -33,6 +33,18 @@ case class GreenplumOptions(
   extends JDBCOptions(params.updated("driver", "org.postgresql.Driver")) {
 
   val delimiter: String = params.getOrElse("delimiter", ",")
+  assert(delimiter.length == 1, "The delimiter should be a single character.")
+
+  /**
+   * This option is only used for these cases:
+   * 1. overwrite a gptable, which is a CascadingTruncateTable.
+   * 2. append data to a gptable.
+   */
+  val transactionOn: Boolean = params.getOrElse("transactionOn", "false").toBoolean
+
+  /** Max number of times we are allowed to retry dropTempTable operation. */
+  val dropTempTableMaxRetries: Int = 3
+
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
 

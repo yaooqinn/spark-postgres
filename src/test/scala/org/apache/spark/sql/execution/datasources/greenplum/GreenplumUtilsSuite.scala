@@ -18,18 +18,24 @@
 package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io.File
-import java.sql.DriverManager
+import java.sql.{Connection, SQLException}
 import java.util.TimeZone
 
 import io.airlift.testing.postgresql.TestingPostgreSqlServer
+import org.mockito.Matchers._
+import org.mockito.Mockito._
+import org.scalatest.mockito.MockitoSugar
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.api.java.function.ForeachPartitionFunction
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
+import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
 import org.apache.spark.util.Utils
 
-class GreenplumUtilsSuite extends SparkFunSuite {
+class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
   val timeZoneId: String = TimeZone.getDefault.getID
 
   var postgres: TestingPostgreSqlServer = _
@@ -129,34 +135,145 @@ class GreenplumUtilsSuite extends SparkFunSuite {
     assert(structConverter(row1, 14) === "{\"a\":14,\"b\":15}")
   }
 
-  test("test copy to greenplum with postgres") {
-    // scalastyle:off
-    val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
-      5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
-    // scalastyle:on
-    val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
-    val df = sparkSession.createDataFrame(rdd)
-    val conn = DriverManager.getConnection(url)
-    val tblname = "gptbl"
-    try {
+  test("test copy to greenplum") {
+    withConnectionAndOptions { (conn, tblname, options) =>
+      // scalastyle:off
+      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
+        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+      // scalastyle:on
+      val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
+      val df = sparkSession.createDataFrame(rdd)
       val stat1 = conn.createStatement()
-      stat1.execute(s"create table $tblname(_1 Int, _2 text)")
-      val schema = new StructType().add("_1", IntegerType).add("_2", StringType)
+      val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
+      stat1.execute(s"create table $tblname($strSchema)")
 
-      val parameters = CaseInsensitiveMap(Map("url" -> s"$url", "dbtable" -> s"$tblname"))
-      GreenplumUtils.copyToGreenplum(df, schema, GreenplumOptions(parameters, timeZoneId))
-
+      GreenplumUtils.transactionalCopy(df, df.schema, options)
       val stat2 = conn.createStatement()
       stat2.executeQuery(s"select * from $tblname")
-      stat2.setFetchSize(kvs.size)
-      val result = stat2.getResultSet
-      while (result.next()) {
-        val k = result.getInt(1)
-        val v = result.getString(2)
+      stat2.setFetchSize(kvs.size + 1)
+      var count = 0
+      val result2 = stat2.getResultSet
+      while (result2.next()) {
+        val k = result2.getInt(1)
+        val v = result2.getString(2)
+        count += 1
         assert(kvs.get(k).get === v)
       }
+      assert(count === kvs.size)
+
+      // Append the df's data to gptbl, so the size will double.
+      GreenplumUtils.nonTransactionalCopy(df, df.schema, options)
+      val stat3 = conn.createStatement()
+      stat3.executeQuery(s"select * from $tblname")
+      stat3.setFetchSize(kvs.size * 2 + 1)
+      val result3 = stat3.getResultSet
+      count = 0
+      while (result3.next()) {
+        count += 1
+      }
+      assert(count === kvs.size * 2)
+
+      // Overwrite gptbl with df's data.
+      GreenplumUtils.transactionalCopy(df, df.schema, options)
+      val stat4 = conn.createStatement()
+      stat4.executeQuery(s"select * from $tblname")
+      stat4.setFetchSize(kvs.size + 1)
+      val result4 = stat4.getResultSet
+      count = 0
+      while (result4.next()) {
+        count += 1
+      }
+      assert(count === kvs.size)
+    }
+  }
+
+  test("test covert value and row") {
+    withConnectionAndOptions { (_, _, options) =>
+      val value = "test\t\rtest\n\\n\\,"
+      assert(GreenplumUtils.convertValue(value, '\t') === "test\\\t\\rtest\\n\\\\n\\\\,")
+
+      val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
+      val schema = new StructType().add("c1", StringType).add("c2", StringType)
+        .add("c3", StringType).add("c4", StringType).add("c5", StringType)
+        .add("c6", StringType)
+      val valueConverters: Array[(Row, Int) => String] =
+        schema.map(s => GreenplumUtils.makeConverter(s.dataType, options)).toArray
+
+      val row = new GenericRow(values)
+      val str = GreenplumUtils.convertRow(row, schema.length, options.delimiter, valueConverters)
+      assert(str === "\\n\t\\\t\t,\t\\r\t\\\\\t\\\\n\n".getBytes("utf-8"))
+    }
+  }
+
+  test("test copy partition") {
+    withConnectionAndOptions { (conn, tblname, options) =>
+
+      val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
+      val schema = new StructType().add("c1", StringType).add("c2", StringType)
+        .add("c3", StringType).add("c4", StringType).add("c5", StringType)
+        .add("c6", StringType)
+      val rows = Array(new GenericRow(values)).toIterator
+
+      val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
+      GreenplumUtils.executeStatement(conn, createTbl)
+
+      GreenplumUtils.copyPartition(rows, options, schema, tblname)
+      val stat = conn.createStatement()
+      val sql = s"SELECT * FROM $tblname"
+      stat.executeQuery(sql)
+      val result = stat.getResultSet
+      result.next()
+      for (i <- (0 until values.size)) {
+        assert(result.getObject(i + 1) === values(i))
+      }
+      assert(!result.next())
+    }
+  }
+
+  test("test transactions support") {
+    withConnectionAndOptions { (conn, tblname, options) =>
+      // scalastyle:off
+      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
+        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+      // scalastyle:on
+      // This suffix should be consisted with the suffix in transactionalCopy
+      val tempSuffix = "sparkGpTmp"
+      val df = mock[DataFrame]
+      val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
+      val realdf = sparkSession.createDataFrame(rdd)
+      val schema = realdf.schema
+      when(df.foreachPartition(any[ForeachPartitionFunction[Row]]()))
+        .thenThrow(classOf[SQLException])
+      when(df.sparkSession).thenReturn(sparkSession)
+      when(df.schema).thenReturn(schema)
+      when(df.rdd).thenReturn(realdf.rdd)
+
+      // This would touch an exception, gptable are not created and temp table would be removed
+      intercept[PartitionCopyFailureException](
+        GreenplumUtils.transactionalCopy(df, schema, options))
+
+      val showTables = "SELECT table_name FROM information_schema.tables"
+      val stat = conn.createStatement()
+      val result = stat.executeQuery(showTables)
+      while (result.next()) {
+        val tbl = result.getString(1)
+        assert(tbl != tblname && !tbl.endsWith(tempSuffix))
+      }
+    }
+  }
+
+  def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
+    val paras =
+      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest",
+      "transactionOn" -> "true"))
+    val options = GreenplumOptions(paras, timeZoneId)
+    val conn = JdbcUtils.createConnectionFactory(options)()
+    try {
+      f(conn, options.table, options)
     } finally {
-      conn.close()
+      val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
+      GreenplumUtils.executeStatement(conn, dropTbl)
+      GreenplumUtils.closeConnSilent(conn)
     }
   }
 }

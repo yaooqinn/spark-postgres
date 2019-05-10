@@ -21,6 +21,7 @@ import org.apache.spark.sql.{AnalysisException, DataFrame, SaveMode, SQLContext}
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.jdbc._
 import org.apache.spark.sql.sources.{BaseRelation, CreatableRelationProvider, DataSourceRegister, RelationProvider}
+import org.apache.spark.sql.types.StructType
 
 class DefaultSource
   extends RelationProvider with CreatableRelationProvider with DataSourceRegister {
@@ -64,33 +65,56 @@ class DefaultSource
       df: DataFrame): BaseRelation = {
     val options =
       GreenplumOptions(CaseInsensitiveMap(parameters), sqlContext.conf.sessionLocalTimeZone)
+    val isCaseSensitive = sqlContext.conf.caseSensitiveAnalysis
+
     val conn = createConnectionFactory(options)()
     try {
       if (tableExists(conn, options)) {
+        // In fact, the mode here is Overwrite constantly, we add other modes just for compatible.
         mode match {
           case SaveMode.Overwrite
             if options.isTruncate && isCascadingTruncateTable(options.url).contains(false) =>
+            val tableSchema = getSchemaOption(conn, options)
+            checkSchema(tableSchema, df.schema, isCaseSensitive)
             truncateTable(conn, options)
-            val tableSchema = getSchemaOption(conn, options).getOrElse(df.schema)
-            copyToGreenplum(df, tableSchema, options)
+            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
+              tableSchema.getOrElse(df.schema), options)
           case SaveMode.Overwrite =>
-            dropTable(conn, options.table)
-            createTable(conn, df, options)
-            copyToGreenplum(df, df.schema, options)
+            transactionalCopy(df, df.schema, options)
           case SaveMode.Append =>
-            val tableSchema = getSchemaOption(conn, options).getOrElse(df.schema)
-            copyToGreenplum(df, tableSchema, options)
+            val tableSchema = getSchemaOption(conn, options)
+            checkSchema(tableSchema, df.schema, isCaseSensitive)
+            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
+              tableSchema.getOrElse(df.schema), options)
           case SaveMode.ErrorIfExists =>
             throw new AnalysisException(s"Table or view '${options.table}' already exists. $mode")
           case SaveMode.Ignore => // do nothing
         }
       } else {
-        createTable(conn, df, options)
-        copyToGreenplum(df, df.schema, options)
+        transactionalCopy(df, df.schema, options)
       }
     } finally {
-      conn.close()
+      closeConnSilent(conn)
     }
     createRelation(sqlContext, parameters)
+  }
+
+  private def checkSchema(
+      tableSchema: Option[StructType],
+      dfSchema: StructType,
+      isCaseSensitive: Boolean): Unit = {
+    if (!tableSchema.isEmpty) {
+      val columnNameEquality = if (isCaseSensitive) {
+        org.apache.spark.sql.catalyst.analysis.caseSensitiveResolution
+      } else {
+        org.apache.spark.sql.catalyst.analysis.caseInsensitiveResolution
+      }
+      val tableColumnNames = tableSchema.get.fieldNames
+      dfSchema.fields.map { col =>
+        tableColumnNames.find(f => columnNameEquality(f, col.name)).getOrElse(
+          throw new AnalysisException(s"Column ${col.name} not found int schema $tableSchema.")
+        )
+      }
+    }
   }
 }
