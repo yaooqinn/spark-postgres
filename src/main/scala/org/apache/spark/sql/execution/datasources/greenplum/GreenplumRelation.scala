@@ -68,14 +68,12 @@ private[sql] case class GreenplumRelation(
         if (overwrite) {
           if (options.isTruncate && isCascadingTruncateTable(options.url).contains(false)) {
             truncateTable(conn, options)
-            val finaldata = data.coalesce(1)
-            copyAppendToGreenplum(finaldata, schema, options)
+            copyAppendToGreenplum(data, schema, options)
           } else {
             copyOverwriteToGreenplum(data, schema, options)
           }
         } else {
-          val finaldata = data.coalesce(1)
-          copyAppendToGreenplum(finaldata, schema, options)
+          copyAppendToGreenplum(data, schema, options)
         }
       } else {
         copyOverwriteToGreenplum(data, schema, options)

@@ -262,7 +262,8 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
     val paras =
-      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest"))
+      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest",
+      "transactionForAppend" -> "true"))
     val options = GreenplumOptions(paras, timeZoneId)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {

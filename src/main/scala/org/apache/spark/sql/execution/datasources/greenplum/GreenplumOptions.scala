@@ -34,6 +34,10 @@ case class GreenplumOptions(
 
   val delimiter: String = params.getOrElse("delimiter", ",")
   assert(delimiter.length == 1, "The delimiter should be a single character.")
+
+  val transactionForAppend: Boolean =
+    params.getOrElse("transactionForAppend", "false").equals("true")
+
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
 

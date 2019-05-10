@@ -103,8 +103,19 @@ object GreenplumUtils extends Logging {
       df: DataFrame,
       schema: StructType,
       options: GreenplumOptions): Unit = {
-    df.foreachPartition { rows =>
+    var finalDf = df
+    if (options.transactionForAppend) {
+      finalDf = df.coalesce(1)
+    }
+    val accumulator = finalDf.sparkSession.sparkContext.longAccumulator("copySuccess")
+    val partNum = finalDf.rdd.getNumPartitions
+
+    finalDf.foreachPartition { rows =>
       copyParition(rows, options, schema, options.table)
+    }
+
+    if (accumulator.value != partNum) {
+      logError(s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
     }
   }
 
@@ -122,11 +133,9 @@ object GreenplumUtils extends Logging {
       df: DataFrame,
       schema: StructType,
       options: GreenplumOptions): Unit = {
-    val randomString = UUID.randomUUID().toString.flatMap {
-      case '-' => ""
-      case c => s"$c"
-    }
-    val tempTable = s"sparkGpTmp$randomString"
+    val randomString = UUID.randomUUID().toString.filterNot(_ == '-')
+    val suffix = "sparkGpTmp"
+    val tempTable = s"${options.table}_${randomString}_$suffix"
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
@@ -148,6 +157,7 @@ object GreenplumUtils extends Logging {
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
         executeStatement(conn, renameTempTbl)
       } else {
+        logError(s"Some partitions failed(successful: ${accumulator.value}, total: $partNum)")
         val dropTempTbl = s"DROP TABLE $tempTable"
         executeStatement(conn, dropTempTbl)
       }
@@ -205,11 +215,10 @@ object GreenplumUtils extends Logging {
     }
   }
 
-  def executeStatement(conn: Connection, sql: String): Boolean = {
+  def executeStatement(conn: Connection, sql: String): Unit = {
     val statement = conn.createStatement()
     try {
       statement.executeUpdate(sql)
-      true
     } finally {
       statement.close()
     }
