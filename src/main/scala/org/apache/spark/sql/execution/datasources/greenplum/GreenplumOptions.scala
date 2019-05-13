@@ -23,6 +23,7 @@ import org.apache.commons.lang3.time.FastDateFormat
 
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.execution.datasources.jdbc.JDBCOptions
+import org.apache.spark.util.Utils
 
 /**
  * Options for the Greenplum data source.
@@ -44,6 +45,10 @@ case class GreenplumOptions(
 
   /** Max number of times we are allowed to retry dropTempTable operation. */
   val dropTempTableMaxRetries: Int = 3
+
+  /** Timeout for copying a partition's data to greenplum. */
+  val copyTimeout = Utils.timeStringAsMs(params.getOrElse("copyTimeout", "1h"))
+  assert(copyTimeout > 0, "The copy timeout should be positive, 10s, 10min, 1h etc.")
 
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
