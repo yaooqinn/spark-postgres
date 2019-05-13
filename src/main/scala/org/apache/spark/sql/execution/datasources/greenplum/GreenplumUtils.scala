@@ -240,7 +240,7 @@ object GreenplumUtils extends Logging {
         val start = System.nanoTime()
         copyThread.start()
         while (checkCopyThread(start)) {
-          Thread.sleep(1000)
+          Thread.sleep(50)
         }
         copyException.foreach(throw _)
         if (!promisedCopyNums.isCompleted) {
