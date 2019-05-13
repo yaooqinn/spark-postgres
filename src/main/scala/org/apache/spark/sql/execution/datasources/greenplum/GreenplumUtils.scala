@@ -242,7 +242,7 @@ object GreenplumUtils extends Logging {
         while (checkCopyThread(start)) {
           Thread.sleep(1000)
         }
-        copyException.foreach(e => throw e)
+        copyException.foreach(throw _)
         if (!promisedCopyNums.isCompleted) {
           throw new TimeoutException(
             s"""

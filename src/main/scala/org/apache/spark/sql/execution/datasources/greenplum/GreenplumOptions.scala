@@ -48,7 +48,7 @@ case class GreenplumOptions(
 
   /** Timeout for copying a partition's data to greenplum. */
   val copyTimeout = Utils.timeStringAsMs(params.getOrElse("copyTimeout", "1h"))
-  assert(copyTimeout > 0, "The copy timeout should be a positive number.")
+  assert(copyTimeout > 0, "The copy timeout should be positive, 10s, 10min, 1h etc.")
 
   val timeZone: TimeZone = DateTimeUtils.getTimeZone(
     params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
