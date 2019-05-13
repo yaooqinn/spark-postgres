@@ -21,7 +21,7 @@ import java.io._
 import java.nio.charset.StandardCharsets
 import java.sql.Connection
 import java.util.UUID
-import java.util.concurrent.{Callable, TimeoutException, TimeUnit}
+import java.util.concurrent.{TimeoutException, TimeUnit}
 
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
@@ -228,20 +228,18 @@ object GreenplumUtils extends Logging {
           }
         }
       }
-      val copyThreadChecker = new Callable[Boolean] {
-        val startTime = System.currentTimeMillis()
-        val timeout = TimeUnit.MINUTES.toMillis(options.copyTimeout)
-        override def call(): Boolean = {
-          copyException.isEmpty && System.currentTimeMillis() - startTime < timeout &&
-            !promisedCopyNums.isCompleted
-        }
+
+      val timeout = TimeUnit.MINUTES.toNanos(options.copyTimeout)
+      def checkCopyThread(start: Long): Boolean = {
+        copyException.isEmpty && System.nanoTime() - start < timeout &&
+          !promisedCopyNums.isCompleted
       }
 
       try {
         logInfo("Start copy steam to Greenplum")
         val start = System.nanoTime()
         copyThread.start()
-        while (copyThreadChecker.call()) {
+        while (checkCopyThread(start)) {
           Thread.sleep(1000)
         }
         copyException.foreach(e => throw e)
