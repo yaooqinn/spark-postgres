@@ -229,7 +229,7 @@ object GreenplumUtils extends Logging {
         }
       }
 
-      val timeout = TimeUnit.MINUTES.toNanos(options.copyTimeout)
+      val timeout = TimeUnit.MILLISECONDS.toNanos(options.copyTimeout)
       def checkCopyThread(start: Long): Boolean = {
         copyException.isEmpty && System.nanoTime() - start < timeout &&
           !promisedCopyNums.isCompleted
@@ -244,8 +244,13 @@ object GreenplumUtils extends Logging {
         }
         copyException.foreach(e => throw e)
         if (!promisedCopyNums.isCompleted) {
-          throw new TimeoutException(s"The copy operation for copying data to greenplum has" +
-            s" been running for more then the timeout: ${options.copyTimeout} minutes.")
+          throw new TimeoutException(
+            s"""
+               | The copy operation for copying this partition's data to greenplum has been running for
+               | more than the timeout: ${TimeUnit.NANOSECONDS.toSeconds(options.copyTimeout)}s.
+               | You can configure this timeout with option copyTimeout, such as "2h", "100min",
+               | and default copyTimeout is "1h".
+            """.stripMargin)
         }
         val nums = promisedCopyNums.future.value
         val end = System.nanoTime()
