@@ -151,7 +151,7 @@ object GreenplumUtils extends Logging {
     var dropSuccess = false
 
     val dropStmt = s"DROP TABLE IF EXISTS $table"
-    while (dropTempTableRetryCount < dropTmpTableMaxRetry) {
+    while (!dropSuccess && dropTempTableRetryCount < dropTmpTableMaxRetry) {
       try {
         executeStatement(conn, dropStmt)
         dropSuccess = true
