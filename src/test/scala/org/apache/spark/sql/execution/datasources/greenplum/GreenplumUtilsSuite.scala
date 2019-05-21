@@ -25,6 +25,7 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mockito.MockitoSugar
+import scala.concurrent.TimeoutException
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.api.java.function.ForeachPartitionFunction
@@ -262,10 +263,32 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
+  test("test copyPartition with timeout exception") {
+    val tblname = "tempTable"
+    // Set the copyTimeout to 1ms, it must trigger a TimeoutException.
+    val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
+      "dbtable" -> "gptest", "copyTimeout" -> "1ms"))
+    val options = GreenplumOptions(paras, timeZoneId)
+    val conn = JdbcUtils.createConnectionFactory(options)()
+
+    try {
+      val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
+      val schema = new StructType().add("c1", StringType).add("c2", StringType)
+        .add("c3", StringType).add("c4", StringType).add("c5", StringType)
+        .add("c6", StringType)
+      val rows = Array(new GenericRow(values)).toIterator
+      val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
+      GreenplumUtils.executeStatement(conn, createTbl)
+      intercept[TimeoutException](GreenplumUtils.copyPartition(rows, options, schema, tblname))
+    } finally {
+      GreenplumUtils.closeConnSilent(conn)
+    }
+  }
+
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
     val paras =
       CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest",
-      "transactionOn" -> "true", "copyTimeout" -> "20s"))
+      "transactionOn" -> "true"))
     val options = GreenplumOptions(paras, timeZoneId)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
