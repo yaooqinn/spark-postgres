@@ -128,32 +128,42 @@ object GreenplumUtils extends Logging {
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
         executeStatement(conn, renameTempTbl)
       } else {
-        var retryCount = 0
-        var dropSuccess = false
-        val dropTempTbl = s"DROP TABLE $tempTable"
-        try {
-          while (!dropSuccess && retryCount < options.dropTempTableMaxRetries) {
-            try {
-              executeStatement(conn, dropTempTbl)
-              dropSuccess = true
-            } catch {
-              case _: Exception => retryCount += 1
-            }
-          }
-        } finally {
-          if (!dropSuccess) {
-            logError(s"Failed to drop the temp table: $tempTable, you can drop it manually.")
-          }
-          throw new PartitionCopyFailureException(
-            s"""
-               | Job aborted for that there are some partitions failed to copy data to greenPlum:
-               | Total partitions is: ${partNum} and successful partitions is: ${accumulator.value}.
-               | You can retry again.
+        throw new PartitionCopyFailureException(
+          s"""
+             | Job aborted for that there are some partitions failed to copy data to greenPlum:
+             | Total partitions is: ${partNum} and successful partitions is: ${accumulator.value}.
+             | You can retry again.
             """.stripMargin)
-        }
       }
     } finally {
+      retryingDropTableSilent(conn, tempTable, options)
       closeConnSilent(conn)
+    }
+  }
+
+  /**
+   * Drop the table and retry automatically when exception occured.
+   */
+  def retryingDropTableSilent(conn: Connection, table: String, options: GreenplumOptions): Unit = {
+    val dropTmpTableMaxRetry = 3
+    var dropTempTableRetryCount = 0
+    var dropSuccess = false
+
+    val dropStmt = s"DROP TABLE IF EXISTS $table"
+    while (dropTempTableRetryCount < dropTmpTableMaxRetry) {
+      try {
+        executeStatement(conn, dropStmt)
+        dropSuccess = true
+      } catch {
+        case e: Exception =>
+          dropTempTableRetryCount += 1
+          logWarning(s"Drop tempTable $table failed for $dropTempTableRetryCount" +
+            s"/${dropTmpTableMaxRetry} times, and will retry.", e)
+      }
+    }
+    if (!dropSuccess) {
+      logError(s"Drop tempTable $table failed for $dropTmpTableMaxRetry times," +
+        s" and will not retry.")
     }
   }
 
