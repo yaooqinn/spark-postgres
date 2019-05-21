@@ -26,6 +26,7 @@ import java.util.concurrent.{TimeoutException, TimeUnit}
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
 import scala.concurrent.Promise
+import scala.concurrent.duration.Duration
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
@@ -33,7 +34,7 @@ import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
-import org.apache.spark.util.{LongAccumulator, Utils}
+import org.apache.spark.util.{LongAccumulator, ThreadUtils, Utils}
 
 object GreenplumUtils extends Logging {
 
@@ -224,8 +225,6 @@ object GreenplumUtils extends Logging {
       val sql = s"COPY $tableName" +
         s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
 
-      @volatile
-      var copyException: Option[Throwable] = None
       val promisedCopyNums = Promise[Long]
       val copyThread = new Thread("copy-to-gp-thread") {
         override def run(): Unit = {
@@ -234,38 +233,31 @@ object GreenplumUtils extends Logging {
               copyManager.copyIn(sql, in)
             }
           } catch {
-            case e: Exception => copyException = Some(e)
+            case e: Exception => promisedCopyNums.failure(e)
           }
         }
-      }
-
-      val timeout = TimeUnit.MILLISECONDS.toNanos(options.copyTimeout)
-      def checkCopyThread(start: Long): Boolean = {
-        copyException.isEmpty && System.nanoTime() - start < timeout &&
-          !promisedCopyNums.isCompleted
       }
 
       try {
         logInfo("Start copy steam to Greenplum")
         val start = System.nanoTime()
         copyThread.start()
-        while (checkCopyThread(start)) {
-          Thread.sleep(50)
+        try {
+          val nums = ThreadUtils.awaitResult(promisedCopyNums.future,
+            Duration(options.copyTimeout, TimeUnit.MILLISECONDS))
+          val end = System.nanoTime()
+          logInfo(s"Copied $nums row(s) to Greenplum," +
+            s" time taken: ${(end - start) / math.pow(10, 9)}s")
+        } catch {
+          case _: TimeoutException =>
+            throw new TimeoutException(
+              s"""
+                 | The copy operation for copying this partition's data to greenplum has been running for
+                 | more than the timeout: ${TimeUnit.MILLISECONDS.toSeconds(options.copyTimeout)}s.
+                 | You can configure this timeout with option copyTimeout, such as "2h", "100min",
+                 | and default copyTimeout is "1h".
+               """.stripMargin)
         }
-        copyException.foreach(throw _)
-        if (!promisedCopyNums.isCompleted) {
-          throw new TimeoutException(
-            s"""
-               | The copy operation for copying this partition's data to greenplum has been running for
-               | more than the timeout: ${TimeUnit.NANOSECONDS.toSeconds(options.copyTimeout)}s.
-               | You can configure this timeout with option copyTimeout, such as "2h", "100min",
-               | and default copyTimeout is "1h".
-            """.stripMargin)
-        }
-        val nums = promisedCopyNums.future.value
-        val end = System.nanoTime()
-        logInfo(s"Copied $nums row(s) to Greenplum," +
-          s" time taken: ${(end - start) / math.pow(10, 9)}s")
         accumulator.foreach(_.add(1L))
       } finally {
         copyThread.interrupt()
