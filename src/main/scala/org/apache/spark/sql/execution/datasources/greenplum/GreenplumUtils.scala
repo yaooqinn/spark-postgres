@@ -287,7 +287,7 @@ object GreenplumUtils extends Logging {
     }
   }
 
-  def reOrderDataFrameColumn(df: DataFrame, tableSchema: Option[StructType]): DataFrame = {
+  def reorderDataFrameColumns(df: DataFrame, tableSchema: Option[StructType]): DataFrame = {
     tableSchema.map { schema =>
       df.selectExpr(schema.map(filed => filed.name): _*)
     }.getOrElse(df)

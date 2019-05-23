@@ -72,7 +72,7 @@ class DefaultSource
       if (tableExists(conn, options)) {
         val tableSchema = getSchemaOption(conn, options)
         checkSchema(tableSchema, df.schema, isCaseSensitive)
-        val orderedDf = reOrderDataFrameColumn(df, tableSchema)
+        val orderedDf = reorderDataFrameColumns(df, tableSchema)
         // In fact, the mode here is Overwrite constantly, we add other modes just for compatible.
         mode match {
           case SaveMode.Overwrite
