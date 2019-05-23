@@ -112,9 +112,12 @@ object GreenplumUtils extends Logging {
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
     val conn = JdbcUtils.createConnectionFactory(options)()
+    var transactionSuccessful = false
+    var tempTblCreated = false
 
     try {
       executeStatement(conn, createTempTbl)
+      tempTblCreated = true
       val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
       val partNum = df.rdd.getNumPartitions
 
@@ -123,12 +126,14 @@ object GreenplumUtils extends Logging {
       }
 
       if (accumulator.value == partNum) {
-        val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
-        executeStatement(conn, dropTbl)
+        if (JdbcUtils.tableExists(conn, options)) {
+          JdbcUtils.dropTable(conn, options.table)
+        }
 
         val newTableName = s"${options.table}".split("\\.").last
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${newTableName}"
         executeStatement(conn, renameTempTbl)
+        transactionSuccessful = true
       } else {
         throw new PartitionCopyFailureException(
           s"""
@@ -138,7 +143,9 @@ object GreenplumUtils extends Logging {
             """.stripMargin)
       }
     } finally {
-      retryingDropTableSilent(conn, tempTable, options)
+      if (!transactionSuccessful && tempTblCreated) {
+        retryingDropTableSilent(conn, tempTable)
+      }
       closeConnSilent(conn)
     }
   }
@@ -146,15 +153,14 @@ object GreenplumUtils extends Logging {
   /**
    * Drop the table and retry automatically when exception occured.
    */
-  def retryingDropTableSilent(conn: Connection, table: String, options: GreenplumOptions): Unit = {
+  def retryingDropTableSilent(conn: Connection, table: String): Unit = {
     val dropTmpTableMaxRetry = 3
     var dropTempTableRetryCount = 0
     var dropSuccess = false
 
-    val dropStmt = s"DROP TABLE IF EXISTS $table"
     while (!dropSuccess && dropTempTableRetryCount < dropTmpTableMaxRetry) {
       try {
-        executeStatement(conn, dropStmt)
+        JdbcUtils.dropTable(conn, table)
         dropSuccess = true
       } catch {
         case e: Exception =>

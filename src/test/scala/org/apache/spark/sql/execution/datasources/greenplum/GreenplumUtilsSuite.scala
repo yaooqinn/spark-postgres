@@ -144,16 +144,14 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       // scalastyle:on
       val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
       val df = sparkSession.createDataFrame(rdd)
-      val stat1 = conn.createStatement()
-      val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
-      stat1.execute(s"create table $tblname($strSchema)")
+      val defaultSource = new DefaultSource
 
-      GreenplumUtils.transactionalCopy(df, df.schema, options)
-      val stat2 = conn.createStatement()
-      stat2.executeQuery(s"select * from $tblname")
-      stat2.setFetchSize(kvs.size + 1)
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, options.params, df)
+      val stmt1 = conn.createStatement()
+      stmt1.executeQuery(s"select * from $tblname")
+      stmt1.setFetchSize(kvs.size + 1)
       var count = 0
-      val result2 = stat2.getResultSet
+      val result2 = stmt1.getResultSet
       while (result2.next()) {
         val k = result2.getInt(1)
         val v = result2.getString(2)
@@ -163,11 +161,11 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size)
 
       // Append the df's data to gptbl, so the size will double.
-      GreenplumUtils.nonTransactionalCopy(df, df.schema, options)
-      val stat3 = conn.createStatement()
-      stat3.executeQuery(s"select * from $tblname")
-      stat3.setFetchSize(kvs.size * 2 + 1)
-      val result3 = stat3.getResultSet
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
+      val stmt2 = conn.createStatement()
+      stmt2.executeQuery(s"select * from $tblname")
+      stmt2.setFetchSize(kvs.size * 2 + 1)
+      val result3 = stmt2.getResultSet
       count = 0
       while (result3.next()) {
         count += 1
@@ -175,7 +173,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size * 2)
 
       // Overwrite gptbl with df's data.
-      GreenplumUtils.transactionalCopy(df, df.schema, options)
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, options.params, df)
       val stat4 = conn.createStatement()
       stat4.executeQuery(s"select * from $tblname")
       stat4.setFetchSize(kvs.size + 1)
