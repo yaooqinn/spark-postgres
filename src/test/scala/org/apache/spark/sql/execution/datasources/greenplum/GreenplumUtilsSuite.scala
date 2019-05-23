@@ -263,16 +263,21 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
   }
 
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
+    val schema = "gptest"
     val paras =
-      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> "gptest",
+      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> s"$schema.test",
       "transactionOn" -> "true"))
     val options = GreenplumOptions(paras, timeZoneId)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
+      val createSchema = s"CREATE SCHEMA IF NOT EXISTS $schema"
+      GreenplumUtils.executeStatement(conn, createSchema)
       f(conn, options.table, options)
     } finally {
       val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
+      val dropSchema = s"DROP SCHEMA IF EXISTS $schema"
       GreenplumUtils.executeStatement(conn, dropTbl)
+      GreenplumUtils.executeStatement(conn, dropSchema)
       GreenplumUtils.closeConnSilent(conn)
     }
   }

@@ -125,7 +125,8 @@ object GreenplumUtils extends Logging {
         val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
         executeStatement(conn, dropTbl)
 
-        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${options.table}"
+        val newTableName = s"${options.table}".split("\\.").last
+        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${newTableName}"
         executeStatement(conn, renameTempTbl)
       } else {
         var retryCount = 0
