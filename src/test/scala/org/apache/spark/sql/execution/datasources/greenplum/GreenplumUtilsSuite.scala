@@ -29,7 +29,7 @@ import scala.concurrent.TimeoutException
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.api.java.function.ForeachPartitionFunction
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
@@ -127,7 +127,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
     val mapConverter = GreenplumUtils.makeConverter(MapType(IntegerType, IntegerType), options)
     assert(mapConverter(row1, 13) ===
-      Map(13 -> 13, 130 ->130)
+      Map(13 -> 13, 130 -> 130)
         .map(e => e._1 + ":" + e._2).toSeq.sorted.mkString("{", ",", "}"))
 
     val structConverter =
@@ -144,16 +144,14 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       // scalastyle:on
       val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
       val df = sparkSession.createDataFrame(rdd)
-      val stat1 = conn.createStatement()
-      val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
-      stat1.execute(s"create table $tblname($strSchema)")
+      val defaultSource = new DefaultSource
 
-      GreenplumUtils.transactionalCopy(df, df.schema, options)
-      val stat2 = conn.createStatement()
-      stat2.executeQuery(s"select * from $tblname")
-      stat2.setFetchSize(kvs.size + 1)
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, options.params, df)
+      val stmt1 = conn.createStatement()
+      stmt1.executeQuery(s"select * from $tblname")
+      stmt1.setFetchSize(kvs.size + 1)
       var count = 0
-      val result2 = stat2.getResultSet
+      val result2 = stmt1.getResultSet
       while (result2.next()) {
         val k = result2.getInt(1)
         val v = result2.getString(2)
@@ -163,11 +161,11 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size)
 
       // Append the df's data to gptbl, so the size will double.
-      GreenplumUtils.nonTransactionalCopy(df, df.schema, options)
-      val stat3 = conn.createStatement()
-      stat3.executeQuery(s"select * from $tblname")
-      stat3.setFetchSize(kvs.size * 2 + 1)
-      val result3 = stat3.getResultSet
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
+      val stmt2 = conn.createStatement()
+      stmt2.executeQuery(s"select * from $tblname")
+      stmt2.setFetchSize(kvs.size * 2 + 1)
+      val result3 = stmt2.getResultSet
       count = 0
       while (result3.next()) {
         count += 1
@@ -175,7 +173,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       assert(count === kvs.size * 2)
 
       // Overwrite gptbl with df's data.
-      GreenplumUtils.transactionalCopy(df, df.schema, options)
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, options.params, df)
       val stat4 = conn.createStatement()
       stat4.executeQuery(s"select * from $tblname")
       stat4.setFetchSize(kvs.size + 1)
@@ -285,11 +283,39 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
-  def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit ): Unit = {
+  test("test reorder dataframe's columns when relative gp table is existed") {
+    withConnectionAndOptions { (conn, tblname, options) =>
+      // scalastyle:off
+      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
+        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+      // scalastyle:on
+      val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
+      val df = sparkSession.createDataFrame(rdd)
+
+      // create a gptable whose columns order is not equal with dataFrame
+      val createTbl = s"CREATE TABLE $tblname (_2 text, _1 int)"
+      GreenplumUtils.executeStatement(conn, createTbl)
+
+      val defaultSource = new DefaultSource
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
+
+      val stmt = conn.createStatement()
+      stmt.executeQuery(s"select * from $tblname")
+      stmt.setFetchSize(kvs.size + 1)
+      val result4 = stmt.getResultSet
+      var count = 0
+      while (result4.next()) {
+        count += 1
+      }
+      assert(count === kvs.size)
+    }
+  }
+
+  def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit): Unit = {
     val schema = "gptest"
     val paras =
       CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> s"$schema.test",
-      "transactionOn" -> "true"))
+        "transactionOn" -> "true"))
     val options = GreenplumOptions(paras, timeZoneId)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
@@ -305,3 +331,4 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 }
+

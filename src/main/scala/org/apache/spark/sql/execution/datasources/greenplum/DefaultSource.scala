@@ -70,22 +70,21 @@ class DefaultSource
     val conn = createConnectionFactory(options)()
     try {
       if (tableExists(conn, options)) {
+        val tableSchema = getSchemaOption(conn, options)
+        checkSchema(tableSchema, df.schema, isCaseSensitive)
+        val orderedDf = reorderDataFrameColumns(df, tableSchema)
         // In fact, the mode here is Overwrite constantly, we add other modes just for compatible.
         mode match {
           case SaveMode.Overwrite
             if options.isTruncate && isCascadingTruncateTable(options.url).contains(false) =>
-            val tableSchema = getSchemaOption(conn, options)
-            checkSchema(tableSchema, df.schema, isCaseSensitive)
             truncateTable(conn, options)
-            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
-              tableSchema.getOrElse(df.schema), options)
+            nonTransactionalCopy(if (options.transactionOn) orderedDf.coalesce(1) else orderedDf,
+              orderedDf.schema, options)
           case SaveMode.Overwrite =>
-            transactionalCopy(df, df.schema, options)
+            transactionalCopy(orderedDf, orderedDf.schema, options)
           case SaveMode.Append =>
-            val tableSchema = getSchemaOption(conn, options)
-            checkSchema(tableSchema, df.schema, isCaseSensitive)
-            nonTransactionalCopy(if (options.transactionOn) df.coalesce(1) else df,
-              tableSchema.getOrElse(df.schema), options)
+            nonTransactionalCopy(if (options.transactionOn) orderedDf.coalesce(1) else orderedDf,
+              orderedDf.schema, options)
           case SaveMode.ErrorIfExists =>
             throw new AnalysisException(s"Table or view '${options.table}' already exists. $mode")
           case SaveMode.Ignore => // do nothing
