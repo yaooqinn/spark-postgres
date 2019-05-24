@@ -317,8 +317,13 @@ private[greenplum] object TableNameExtractor {
   def extract(tableName: String): CanonicalTblName = {
     tableName match {
       case nonSchemaTable(table) => CanonicalTblName(None, Some(table))
-      case schemaTable(schme, table) => CanonicalTblName(Some(schme), Some(table))
-      case _ => throw new IllegalArgumentException("The table name is illegal.")
+      case schemaTable(schema, table) => CanonicalTblName(Some(schema), Some(table))
+      case _ => throw new IllegalArgumentException(
+        s"""
+           | The table name is illegal, you can set it with the dbtable option, such as
+           | "schemaname"."tableName" or just "tableName" with a default schema "public".
+         """.stripMargin
+      )
     }
   }
 }
