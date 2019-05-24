@@ -311,6 +311,54 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
+  test("test convert the table name to canonical table name") {
+    val quote = "\""
+    val schema = "schema"
+    val table = "table"
+
+    val str1 = s"$table"
+    val str2 = s"${quote}$table${quote}"
+    val str3 = s"$schema.${quote}${quote}$str1${quote}"
+    val str4 = s"${quote}test${quote}test"
+    assert(TableNameExtractor.extract(str1) === CanonicalTblName(None, Some(table)))
+    assert(TableNameExtractor.extract(str2) === CanonicalTblName(None, Some(table)))
+    assert(TableNameExtractor.extract(str3) === CanonicalTblName(Some(schema), Some(table)))
+    intercept[IllegalArgumentException](TableNameExtractor.extract(str4))
+  }
+
+  test("test schema and table names with double quotes") {
+    val quote = "\""
+    val schemaTableNames = Map(s"${quote}163${quote}" -> s"${quote}tempTable${quote}",
+      s"schemaName" -> s"${quote}tempTable${quote}", s"${quote}163${quote}" -> s"tempTable")
+
+    schemaTableNames.foreach { schemaTableName =>
+      val schema = schemaTableName._1
+      val tblname = schemaTableName._2
+      val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
+        "dbtable" -> s"$schema.$tblname"))
+      val options = GreenplumOptions(paras, timeZoneId)
+
+      // scalastyle:off
+      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
+        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+      // scalastyle:on
+      val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
+      val df = sparkSession.createDataFrame(rdd)
+
+      val conn = JdbcUtils.createConnectionFactory(options)()
+
+      try {
+        val createSchema = s"CREATE SCHEMA IF NOT EXISTS $schema "
+        GreenplumUtils.executeStatement(conn, createSchema)
+        val defaultSource = new DefaultSource
+        defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
+        assert(JdbcUtils.tableExists(conn, options))
+      } finally {
+        GreenplumUtils.closeConnSilent(conn)
+      }
+    }
+  }
+
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit): Unit = {
     val schema = "gptest"
     val paras =

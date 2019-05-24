@@ -106,8 +106,13 @@ object GreenplumUtils extends Logging {
       schema: StructType,
       options: GreenplumOptions): Unit = {
     val randomString = UUID.randomUUID().toString.filterNot(_ == '-')
+    val canonicalTblName = TableNameExtractor.extract(options.table)
+    val schemaPrefix = canonicalTblName.schema.map(_ + ".").getOrElse("")
+    val rawTblName = canonicalTblName.rawName
     val suffix = "sparkGpTmp"
-    val tempTable = s"${options.table}_${randomString}_$suffix"
+    val quote = "\""
+
+    val tempTable = s"${schemaPrefix}$quote${rawTblName}_${randomString}_${suffix}$quote"
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
@@ -297,5 +302,23 @@ object GreenplumUtils extends Logging {
     tableSchema.map { schema =>
       df.selectExpr(schema.map(filed => filed.name): _*)
     }.getOrElse(df)
+  }
+}
+
+private[greenplum] case class CanonicalTblName(schema: Option[String], rawName: Option[String])
+
+/**
+ * Extract schema name and raw table name from a table name string.
+ */
+private[greenplum] object TableNameExtractor {
+  private val nonSchemaTable = """[\"]*([0-9a-zA-Z_]+)[\"]*""".r
+  private val schemaTable = """([\"]*[0-9a-zA-Z_]+[\"]*)\.[\"]*([0-9a-zA-Z_]+)[\"]*""".r
+
+  def extract(tableName: String): CanonicalTblName = {
+    tableName match {
+      case nonSchemaTable(table) => CanonicalTblName(None, Some(table))
+      case schemaTable(schme, table) => CanonicalTblName(Some(schme), Some(table))
+      case _ => throw new IllegalArgumentException("The table name is illegal.")
+    }
   }
 }
