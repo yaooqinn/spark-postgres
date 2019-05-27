@@ -36,8 +36,7 @@ class DefaultSource
       parameters: Map[String, String]): BaseRelation = {
     import JDBCOptions._
 
-    val options =
-      GreenplumOptions(CaseInsensitiveMap(parameters), sqlContext.conf.sessionLocalTimeZone)
+    val options = GreenplumOptions(CaseInsensitiveMap(parameters))
     val partitionColumn = options.partitionColumn
     val lowerBound = options.lowerBound
     val upperBound = options.upperBound
@@ -63,8 +62,7 @@ class DefaultSource
       mode: SaveMode,
       parameters: Map[String, String],
       df: DataFrame): BaseRelation = {
-    val options =
-      GreenplumOptions(CaseInsensitiveMap(parameters), sqlContext.conf.sessionLocalTimeZone)
+    val options = GreenplumOptions(CaseInsensitiveMap(parameters))
     val isCaseSensitive = sqlContext.conf.caseSensitiveAnalysis
 
     val conn = createConnectionFactory(options)()

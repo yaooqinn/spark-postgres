@@ -19,19 +19,19 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io._
 import java.nio.charset.StandardCharsets
-import java.sql.Connection
+import java.sql.{Connection, Date, Timestamp}
 import java.util.UUID
 import java.util.concurrent.{TimeoutException, TimeUnit}
 
-import org.postgresql.copy.CopyManager
-import org.postgresql.core.BaseConnection
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
 
 import org.apache.spark.SparkEnv
+import org.postgresql.copy.CopyManager
+import org.postgresql.core.BaseConnection
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, Row}
-import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
 import org.apache.spark.util.{LongAccumulator, ThreadUtils, Utils}
@@ -52,10 +52,9 @@ object GreenplumUtils extends Logging {
     case DecimalType() => (r: Row, i: Int) => r.getDecimal(i).toString
 
     case DateType =>
-      (r: Row, i: Int) => options.dateFormat.format(DateTimeUtils.toJavaDate(r.getInt(i)))
+      (r: Row, i: Int) => r.getAs[Date](i).toString
 
-    case TimestampType => (r: Row, i: Int) =>
-      options.timestampFormat.format(DateTimeUtils.toJavaTimestamp(r.getLong(i)))
+    case TimestampType => (r: Row, i: Int) => r.getAs[Timestamp](i).toString
 
     case BinaryType => (r: Row, i: Int) =>
       new String(r.getAs[Array[Byte]](i), StandardCharsets.UTF_8)

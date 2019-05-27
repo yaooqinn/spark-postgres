@@ -18,27 +18,26 @@
 package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io.File
-import java.sql.{Connection, SQLException}
+import java.sql.{Connection, Date, SQLException, Timestamp}
 import java.util.TimeZone
+
+import scala.concurrent.TimeoutException
 
 import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mockito.MockitoSugar
-import scala.concurrent.TimeoutException
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.api.java.function.ForeachPartitionFunction
 import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.GenericRow
-import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
+import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
 import org.apache.spark.sql.types._
 import org.apache.spark.util.Utils
 
 class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
-  val timeZoneId: String = TimeZone.getDefault.getID
-
   var postgres: TestingPostgreSqlServer = _
   var url: String = _
   var sparkSession: SparkSession = _
@@ -69,14 +68,14 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
-  ignore("make converter") {
-    val options = GreenplumOptions(CaseInsensitiveMap(
-      Map("url" -> "", "dbtable" -> "src")), timeZoneId)
+  test("make converter") {
+    val options = GreenplumOptions(CaseInsensitiveMap(Map("url" -> "", "dbtable" -> "src")))
 
+    val now = System.currentTimeMillis()
     val row1 = Row(true, 1.toByte, 2.toShort, 3, 4.toLong,
       5.toFloat, 6.toDouble, 7.toString, 8.toString.getBytes,
-      9,
-      10L,
+      new Date(now),
+      new Timestamp(now),
       new java.math.BigDecimal(11),
       Array[String]("12", "12"),
       Map(13 -> 13, 130 -> 130),
@@ -113,27 +112,26 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     assert(binConverter(row1, 8) === "8")
 
     val dateConverter = GreenplumUtils.makeConverter(DateType, options)
-    assert(dateConverter(row1, 9) === options.dateFormat.format(DateTimeUtils.toJavaDate(9)))
+    assert(dateConverter(row1, 9) === new Date(now).toString)
 
     val tsConverter = GreenplumUtils.makeConverter(TimestampType, options)
-    assert(tsConverter(row1, 10) ===
-      options.timestampFormat.format(DateTimeUtils.toJavaTimestamp(10)))
+    assert(tsConverter(row1, 10) === new Timestamp(now).toString)
 
     val decimalConverter = GreenplumUtils.makeConverter(DecimalType(2, 0), options)
     assert(decimalConverter(row1, 11) === new java.math.BigDecimal(11).toString)
 
-    val arrConverter = GreenplumUtils.makeConverter(ArrayType(StringType), options)
-    assert(arrConverter(row1, 12) === Array[String]("12", "12").mkString("[", ",", "]"))
-
-    val mapConverter = GreenplumUtils.makeConverter(MapType(IntegerType, IntegerType), options)
-    assert(mapConverter(row1, 13) ===
-      Map(13 -> 13, 130 -> 130)
-        .map(e => e._1 + ":" + e._2).toSeq.sorted.mkString("{", ",", "}"))
-
-    val structConverter =
-      GreenplumUtils.makeConverter(
-        StructType(Array(StructField("a", IntegerType), StructField("b", StringType))), options)
-    assert(structConverter(row1, 14) === "{\"a\":14,\"b\":15}")
+//    val arrConverter = GreenplumUtils.makeConverter(ArrayType(StringType), options)
+//    assert(arrConverter(row1, 12) === Array[String]("12", "12").mkString("[", ",", "]"))
+//
+//    val mapConverter = GreenplumUtils.makeConverter(MapType(IntegerType, IntegerType), options)
+//    assert(mapConverter(row1, 13) ===
+//      Map(13 -> 13, 130 -> 130)
+//        .map(e => e._1 + ":" + e._2).toSeq.sorted.mkString("{", ",", "}"))
+//
+//    val structConverter =
+//      GreenplumUtils.makeConverter(
+//        StructType(Array(StructField("a", IntegerType), StructField("b", StringType))), options)
+//    assert(structConverter(row1, 14) === "{\"a\":14,\"b\":15}")
   }
 
   test("test copy to greenplum") {
@@ -266,7 +264,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     // Set the copyTimeout to 1ms, it must trigger a TimeoutException.
     val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
       "dbtable" -> "gptest", "copyTimeout" -> "1ms"))
-    val options = GreenplumOptions(paras, timeZoneId)
+    val options = GreenplumOptions(paras)
     val conn = JdbcUtils.createConnectionFactory(options)()
 
     try {
@@ -336,7 +334,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val tblname = schemaTableName._2
       val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
         "dbtable" -> s"$schema.$tblname"))
-      val options = GreenplumOptions(paras, timeZoneId)
+      val options = GreenplumOptions(paras)
 
       // scalastyle:off
       val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
@@ -364,7 +362,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     val paras =
       CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> s"$schema.test",
         "transactionOn" -> "true"))
-    val options = GreenplumOptions(paras, timeZoneId)
+    val options = GreenplumOptions(paras)
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
       val createSchema = s"CREATE SCHEMA IF NOT EXISTS $schema"
