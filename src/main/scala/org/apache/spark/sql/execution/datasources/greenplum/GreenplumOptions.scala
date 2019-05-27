@@ -17,20 +17,14 @@
 
 package org.apache.spark.sql.execution.datasources.greenplum
 
-import java.util.{Locale, TimeZone}
-
-import org.apache.commons.lang3.time.FastDateFormat
-
-import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
+import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.jdbc.JDBCOptions
 import org.apache.spark.util.Utils
 
 /**
  * Options for the Greenplum data source.
  */
-case class GreenplumOptions(
-    @transient params: CaseInsensitiveMap[String],
-    defaultTimeZoneId: String)
+case class GreenplumOptions(@transient params: CaseInsensitiveMap[String])
   extends JDBCOptions(params.updated("driver", "org.postgresql.Driver")) {
 
   val delimiter: String = params.getOrElse("delimiter", ",")
@@ -49,15 +43,4 @@ case class GreenplumOptions(
   /** Timeout for copying a partition's data to greenplum. */
   val copyTimeout = Utils.timeStringAsMs(params.getOrElse("copyTimeout", "1h"))
   assert(copyTimeout > 0, "The copy timeout should be positive, 10s, 10min, 1h etc.")
-
-  val timeZone: TimeZone = DateTimeUtils.getTimeZone(
-    params.getOrElse(DateTimeUtils.TIMEZONE_OPTION, defaultTimeZoneId))
-
-  // Uses `FastDateFormat` which can be direct replacement for `SimpleDateFormat` and thread-safe.
-  val dateFormat: FastDateFormat =
-    FastDateFormat.getInstance(params.getOrElse("dateFormat", "yyyy-MM-dd"), Locale.US)
-
-  val timestampFormat: FastDateFormat =
-    FastDateFormat.getInstance(
-      params.getOrElse("timestampFormat", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"), timeZone, Locale.US)
 }
