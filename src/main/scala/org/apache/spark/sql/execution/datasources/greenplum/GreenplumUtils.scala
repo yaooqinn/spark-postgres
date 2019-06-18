@@ -132,9 +132,7 @@ object GreenplumUtils extends Logging {
         copyPartition(rows, options, schema, tempTable, Some(accumulator))
       }
 
-      if (conn.isClosed) {
-        conn = JdbcUtils.createConnectionFactory(options)()
-      }
+      conn = resetConnectionIfNecessary(conn, options)
       if (accumulator.value == partNum) {
         if (JdbcUtils.tableExists(conn, options)) {
           JdbcUtils.dropTable(conn, options.table)
@@ -157,6 +155,14 @@ object GreenplumUtils extends Logging {
         retryingDropTableSilent(conn, tempTable)
       }
       closeConnSilent(conn)
+    }
+  }
+
+  def resetConnectionIfNecessary(conn: Connection, options: GreenplumOptions): Connection = {
+    if (conn.isClosed) {
+      JdbcUtils.createConnectionFactory(options)()
+    } else {
+      conn
     }
   }
 
@@ -290,7 +296,7 @@ object GreenplumUtils extends Logging {
     try {
       conn.close()
     } catch {
-      case e: Exception => logWarning("Exception occurred when closing connection.", e)
+      case e: Exception => logWarning("Exception occured when closing connection.", e)
     }
   }
 

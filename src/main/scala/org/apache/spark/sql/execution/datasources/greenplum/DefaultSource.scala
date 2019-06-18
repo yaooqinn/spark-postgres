@@ -100,7 +100,7 @@ class DefaultSource
       tableSchema: Option[StructType],
       dfSchema: StructType,
       isCaseSensitive: Boolean): Unit = {
-    if (!tableSchema.isEmpty) {
+    if (tableSchema.isDefined) {
       val columnNameEquality = if (isCaseSensitive) {
         org.apache.spark.sql.catalyst.analysis.caseSensitiveResolution
       } else {
