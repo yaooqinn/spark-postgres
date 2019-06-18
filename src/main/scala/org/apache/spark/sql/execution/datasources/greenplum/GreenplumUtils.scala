@@ -26,6 +26,9 @@ import java.util.concurrent.{TimeoutException, TimeUnit}
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
 
+import org.postgresql.copy.CopyManager
+import org.postgresql.core.BaseConnection
+
 import org.apache.spark.SparkEnv
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
@@ -111,11 +114,11 @@ object GreenplumUtils extends Logging {
     val suffix = "sparkGpTmp"
     val quote = "\""
 
-    val tempTable = s"${schemaPrefix}$quote${rawTblName}_${randomString}_${suffix}$quote"
+    val tempTable = s"$schemaPrefix$quote${rawTblName}_${randomString}_$suffix$quote"
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
-    val conn = JdbcUtils.createConnectionFactory(options)()
+    var conn = JdbcUtils.createConnectionFactory(options)()
     var transactionSuccessful = false
     var tempTblCreated = false
 
@@ -129,20 +132,23 @@ object GreenplumUtils extends Logging {
         copyPartition(rows, options, schema, tempTable, Some(accumulator))
       }
 
+      if (conn.isClosed) {
+        conn = JdbcUtils.createConnectionFactory(options)()
+      }
       if (accumulator.value == partNum) {
         if (JdbcUtils.tableExists(conn, options)) {
           JdbcUtils.dropTable(conn, options.table)
         }
 
         val newTableName = s"${options.table}".split("\\.").last
-        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${newTableName}"
+        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
         executeStatement(conn, renameTempTbl)
         transactionSuccessful = true
       } else {
         throw new PartitionCopyFailureException(
           s"""
              | Job aborted for that there are some partitions failed to copy data to greenPlum:
-             | Total partitions is: ${partNum} and successful partitions is: ${accumulator.value}.
+             | Total partitions is: $partNum and successful partitions is: ${accumulator.value}.
              | You can retry again.
             """.stripMargin)
       }
@@ -170,7 +176,7 @@ object GreenplumUtils extends Logging {
         case e: Exception =>
           dropTempTableRetryCount += 1
           logWarning(s"Drop tempTable $table failed for $dropTempTableRetryCount" +
-            s"/${dropTmpTableMaxRetry} times, and will retry.", e)
+            s"/$dropTmpTableMaxRetry times, and will retry.", e)
       }
     }
     if (!dropSuccess) {
@@ -284,7 +290,7 @@ object GreenplumUtils extends Logging {
     try {
       conn.close()
     } catch {
-      case e: Exception => logWarning("Exception occured when closing connection.", e)
+      case e: Exception => logWarning("Exception occurred when closing connection.", e)
     }
   }
 
@@ -304,7 +310,7 @@ object GreenplumUtils extends Logging {
   }
 }
 
-private[greenplum] case class CanonicalTblName(schema: Option[String], rawName: Option[String])
+private[greenplum] case class CanonicalTblName(schema: Option[String], rawName: String)
 
 /**
  * Extract schema name and raw table name from a table name string.
@@ -315,8 +321,8 @@ private[greenplum] object TableNameExtractor {
 
   def extract(tableName: String): CanonicalTblName = {
     tableName match {
-      case nonSchemaTable(table) => CanonicalTblName(None, Some(table))
-      case schemaTable(schema, table) => CanonicalTblName(Some(schema), Some(table))
+      case nonSchemaTable(t) => CanonicalTblName(None, t)
+      case schemaTable(schema, t) => CanonicalTblName(Some(schema), t)
       case _ => throw new IllegalArgumentException(
         s"""
            | The table name is illegal, you can set it with the dbtable option, such as

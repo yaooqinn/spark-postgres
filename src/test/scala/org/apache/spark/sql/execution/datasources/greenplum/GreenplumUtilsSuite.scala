@@ -318,9 +318,9 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     val str2 = s"${quote}$table${quote}"
     val str3 = s"$schema.${quote}${quote}$str1${quote}"
     val str4 = s"${quote}test${quote}test"
-    assert(TableNameExtractor.extract(str1) === CanonicalTblName(None, Some(table)))
-    assert(TableNameExtractor.extract(str2) === CanonicalTblName(None, Some(table)))
-    assert(TableNameExtractor.extract(str3) === CanonicalTblName(Some(schema), Some(table)))
+    assert(TableNameExtractor.extract(str1) === CanonicalTblName(None, table))
+    assert(TableNameExtractor.extract(str2) === CanonicalTblName(None, table))
+    assert(TableNameExtractor.extract(str3) === CanonicalTblName(Some(schema), table))
     intercept[IllegalArgumentException](TableNameExtractor.extract(str4))
   }
 
