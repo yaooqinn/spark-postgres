@@ -176,7 +176,7 @@ object GreenplumUtils extends Logging {
         case e: Exception =>
           dropTempTableRetryCount += 1
           logWarning(s"Drop tempTable $table failed for $dropTempTableRetryCount" +
-            s"/$dropTmpTableMaxRetry times, and will retry.", e)
+            s"/${dropTmpTableMaxRetry} times, and will retry.", e)
       }
     }
     if (!dropSuccess) {
