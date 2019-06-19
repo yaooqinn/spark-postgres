@@ -27,7 +27,6 @@ class DefaultSource
   extends RelationProvider with CreatableRelationProvider with DataSourceRegister {
 
   import GreenplumUtils._
-  import JdbcUtils._
 
   override def shortName(): String = "greenplum"
 
@@ -65,17 +64,18 @@ class DefaultSource
     val options = GreenplumOptions(CaseInsensitiveMap(parameters))
     val isCaseSensitive = sqlContext.conf.caseSensitiveAnalysis
 
-    val conn = createConnectionFactory(options)()
+    val conn = JdbcUtils.createConnectionFactory(options)()
     try {
-      if (tableExists(conn, options)) {
-        val tableSchema = getSchemaOption(conn, options)
+      if (tableExists(conn, options.table)) {
+        val tableSchema = JdbcUtils.getSchemaOption(conn, options)
         checkSchema(tableSchema, df.schema, isCaseSensitive)
         val orderedDf = reorderDataFrameColumns(df, tableSchema)
         // In fact, the mode here is Overwrite constantly, we add other modes just for compatible.
         mode match {
           case SaveMode.Overwrite
-            if options.isTruncate && isCascadingTruncateTable(options.url).contains(false) =>
-            truncateTable(conn, options)
+            if options.isTruncate &&
+              JdbcUtils.isCascadingTruncateTable(options.url).contains(false) =>
+            JdbcUtils.truncateTable(conn, options)
             nonTransactionalCopy(if (options.transactionOn) orderedDf.coalesce(1) else orderedDf,
               orderedDf.schema, options)
           case SaveMode.Overwrite =>

@@ -25,6 +25,7 @@ import java.util.concurrent.{TimeoutException, TimeUnit}
 
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
+import scala.util.Try
 
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
@@ -139,7 +140,7 @@ object GreenplumUtils extends Logging {
     val conn2 = JdbcUtils.createConnectionFactory(options)()
     try {
       if (accumulator.value == partNum) {
-        if (JdbcUtils.tableExists(conn2, options)) {
+        if (tableExists(conn2, options.table)) {
           JdbcUtils.dropTable(conn2, options.table)
         }
 
@@ -147,7 +148,6 @@ object GreenplumUtils extends Logging {
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
         executeStatement(conn2, renameTempTbl)
       } else {
-        retryingDropTableSilent(conn2, tempTable)
         throw new PartitionCopyFailureException(
           s"""
              | Job aborted for that there are some partitions failed to copy data to greenPlum:
@@ -156,6 +156,9 @@ object GreenplumUtils extends Logging {
             """.stripMargin)
       }
     } finally {
+      if (tableExists(conn2, tempTable)) {
+        retryingDropTableSilent(conn2, tempTable)
+      }
       closeConnSilent(conn2)
     }
   }
@@ -307,6 +310,21 @@ object GreenplumUtils extends Logging {
     tableSchema.map { schema =>
       df.selectExpr(schema.map(filed => filed.name): _*)
     }.getOrElse(df)
+  }
+
+  /**
+   * Returns true if the table already exists in the JDBC database.
+   */
+  def tableExists(conn: Connection, table: String): Boolean = {
+    val query = s"SELECT * FROM $table WHERE 1=0"
+    Try {
+      val statement = conn.prepareStatement(query)
+      try {
+        statement.executeQuery()
+      } finally {
+        statement.close()
+      }
+    }.isSuccess
   }
 }
 

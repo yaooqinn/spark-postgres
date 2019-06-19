@@ -31,7 +31,6 @@ private[sql] case class GreenplumRelation(
   with PrunedFilteredScan
   with InsertableRelation {
 
-  import JdbcUtils._
   import GreenplumUtils._
 
   override def sqlContext: SQLContext = sparkSession.sqlContext
@@ -62,12 +61,13 @@ private[sql] case class GreenplumRelation(
   }
 
   override def insert(data: DataFrame, overwrite: Boolean): Unit = {
-    val conn = createConnectionFactory(options)()
+    val conn = JdbcUtils.createConnectionFactory(options)()
     try {
-      if (tableExists(conn, options)) {
+      if (tableExists(conn, options.table)) {
         if (overwrite) {
-          if (options.isTruncate && isCascadingTruncateTable(options.url).contains(false)) {
-            truncateTable(conn, options)
+          if (options.isTruncate &&
+            JdbcUtils.isCascadingTruncateTable(options.url).contains(false)) {
+            JdbcUtils.truncateTable(conn, options)
             nonTransactionalCopy(if (options.transactionOn) data.coalesce(1) else data,
               schema, options)
           } else {
