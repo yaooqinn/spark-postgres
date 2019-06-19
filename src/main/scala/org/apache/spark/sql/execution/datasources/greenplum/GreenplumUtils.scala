@@ -115,22 +115,27 @@ object GreenplumUtils extends Logging {
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
-    var transactionSuccessful = false
-    var tempTblCreated = false
-    val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
-    val partNum = df.rdd.getNumPartitions
-
+    // Stage 1. create a _sparkGpTmp table as a shadow of the target Greenplum table. If this stage
+    // fails, the whole process will abort.
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
       executeStatement(conn, createTempTbl)
-      tempTblCreated = true
-      df.foreachPartition { rows =>
-        copyPartition(rows, options, schema, tempTable, Some(accumulator))
-      }
     } finally {
       closeConnSilent(conn)
     }
 
+    // Stage 2. Spark executors run copy task to Greenplum, and will increase the accumulator if
+    // each task successfully copied.
+    val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
+    df.foreachPartition { rows =>
+      copyPartition(rows, options, schema, tempTable, Some(accumulator))
+    }
+
+    // Stage 3. if the accumulator value is not equal to the [[Dataframe]] instance's partition
+    // number. The Spark job will fail with a [[PartitionCopyFailureException]].
+    // Otherwise, we will run a rename table ddl statement to rename the tmp table to the final
+    // target table.
+    val partNum = df.rdd.getNumPartitions
     val conn2 = JdbcUtils.createConnectionFactory(options)()
     try {
       if (accumulator.value == partNum) {
@@ -141,8 +146,8 @@ object GreenplumUtils extends Logging {
         val newTableName = s"${options.table}".split("\\.").last
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
         executeStatement(conn2, renameTempTbl)
-        transactionSuccessful = true
       } else {
+        retryingDropTableSilent(conn2, tempTable)
         throw new PartitionCopyFailureException(
           s"""
              | Job aborted for that there are some partitions failed to copy data to greenPlum:
@@ -151,15 +156,12 @@ object GreenplumUtils extends Logging {
             """.stripMargin)
       }
     } finally {
-      if (!transactionSuccessful && tempTblCreated) {
-        retryingDropTableSilent(conn2, tempTable)
-      }
       closeConnSilent(conn2)
     }
   }
 
   /**
-   * Drop the table and retry automatically when exception occured.
+   * Drop the table and retry automatically when exception occurred.
    */
   def retryingDropTableSilent(conn: Connection, table: String): Unit = {
     val dropTmpTableMaxRetry = 3
