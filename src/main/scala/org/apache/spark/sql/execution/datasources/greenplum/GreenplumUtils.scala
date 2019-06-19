@@ -293,7 +293,7 @@ object GreenplumUtils extends Logging {
     try {
       conn.close()
     } catch {
-      case e: Exception => logWarning("Exception occurred when closing connection.", e)
+      case e: Exception => logWarning("Exception occured when closing connection.", e)
     }
   }
 
