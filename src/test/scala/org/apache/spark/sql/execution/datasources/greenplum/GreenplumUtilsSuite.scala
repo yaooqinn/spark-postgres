@@ -357,16 +357,6 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
-  test("reset connection if necessary") {
-    val paras =
-      CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> s"a.test"))
-    val options = GreenplumOptions(paras)
-    val conn = JdbcUtils.createConnectionFactory(options)()
-    assert(GreenplumUtils.resetConnectionIfNecessary(conn, options) === conn)
-    conn.close()
-    assert(GreenplumUtils.resetConnectionIfNecessary(conn, options) !== conn)
-  }
-
   def withConnectionAndOptions(f: (Connection, String, GreenplumOptions) => Unit): Unit = {
     val schema = "gptest"
     val paras =

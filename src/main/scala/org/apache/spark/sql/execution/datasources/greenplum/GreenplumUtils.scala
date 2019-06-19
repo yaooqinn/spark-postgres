@@ -30,9 +30,6 @@ import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
 
 import org.apache.spark.SparkEnv
-import org.postgresql.copy.CopyManager
-import org.postgresql.core.BaseConnection
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
@@ -118,29 +115,32 @@ object GreenplumUtils extends Logging {
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
-    var conn = JdbcUtils.createConnectionFactory(options)()
     var transactionSuccessful = false
     var tempTblCreated = false
+    val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
+    val partNum = df.rdd.getNumPartitions
 
+    val conn = JdbcUtils.createConnectionFactory(options)()
     try {
       executeStatement(conn, createTempTbl)
       tempTblCreated = true
-      val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
-      val partNum = df.rdd.getNumPartitions
-
       df.foreachPartition { rows =>
         copyPartition(rows, options, schema, tempTable, Some(accumulator))
       }
+    } finally {
+      closeConnSilent(conn)
+    }
 
-      conn = resetConnectionIfNecessary(conn, options)
+    val conn2 = JdbcUtils.createConnectionFactory(options)()
+    try {
       if (accumulator.value == partNum) {
-        if (JdbcUtils.tableExists(conn, options)) {
-          JdbcUtils.dropTable(conn, options.table)
+        if (JdbcUtils.tableExists(conn2, options)) {
+          JdbcUtils.dropTable(conn2, options.table)
         }
 
         val newTableName = s"${options.table}".split("\\.").last
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
-        executeStatement(conn, renameTempTbl)
+        executeStatement(conn2, renameTempTbl)
         transactionSuccessful = true
       } else {
         throw new PartitionCopyFailureException(
@@ -152,17 +152,9 @@ object GreenplumUtils extends Logging {
       }
     } finally {
       if (!transactionSuccessful && tempTblCreated) {
-        retryingDropTableSilent(conn, tempTable)
+        retryingDropTableSilent(conn2, tempTable)
       }
-      closeConnSilent(conn)
-    }
-  }
-
-  def resetConnectionIfNecessary(conn: Connection, options: GreenplumOptions): Connection = {
-    if (conn.isClosed) {
-      JdbcUtils.createConnectionFactory(options)()
-    } else {
-      conn
+      closeConnSilent(conn2)
     }
   }
 
@@ -296,7 +288,7 @@ object GreenplumUtils extends Logging {
     try {
       conn.close()
     } catch {
-      case e: Exception => logWarning("Exception occured when closing connection.", e)
+      case e: Exception => logWarning("Exception occurred when closing connection.", e)
     }
   }
 
