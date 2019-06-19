@@ -25,11 +25,12 @@ import java.util.concurrent.{TimeoutException, TimeUnit}
 
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
+import scala.util.Try
 
-import org.apache.spark.SparkEnv
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
@@ -111,51 +112,59 @@ object GreenplumUtils extends Logging {
     val suffix = "sparkGpTmp"
     val quote = "\""
 
-    val tempTable = s"${schemaPrefix}$quote${rawTblName}_${randomString}_${suffix}$quote"
+    val tempTable = s"$schemaPrefix$quote${rawTblName}_${randomString}_$suffix$quote"
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
+    // Stage 1. create a _sparkGpTmp table as a shadow of the target Greenplum table. If this stage
+    // fails, the whole process will abort.
     val conn = JdbcUtils.createConnectionFactory(options)()
-    var transactionSuccessful = false
-    var tempTblCreated = false
-
     try {
       executeStatement(conn, createTempTbl)
-      tempTblCreated = true
-      val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
-      val partNum = df.rdd.getNumPartitions
+    } finally {
+      closeConnSilent(conn)
+    }
 
-      df.foreachPartition { rows =>
-        copyPartition(rows, options, schema, tempTable, Some(accumulator))
-      }
+    // Stage 2. Spark executors run copy task to Greenplum, and will increase the accumulator if
+    // each task successfully copied.
+    val accumulator = df.sparkSession.sparkContext.longAccumulator("copySuccess")
+    df.foreachPartition { rows =>
+      copyPartition(rows, options, schema, tempTable, Some(accumulator))
+    }
 
+    // Stage 3. if the accumulator value is not equal to the [[Dataframe]] instance's partition
+    // number. The Spark job will fail with a [[PartitionCopyFailureException]].
+    // Otherwise, we will run a rename table ddl statement to rename the tmp table to the final
+    // target table.
+    val partNum = df.rdd.getNumPartitions
+    val conn2 = JdbcUtils.createConnectionFactory(options)()
+    try {
       if (accumulator.value == partNum) {
-        if (JdbcUtils.tableExists(conn, options)) {
-          JdbcUtils.dropTable(conn, options.table)
+        if (tableExists(conn2, options.table)) {
+          JdbcUtils.dropTable(conn2, options.table)
         }
 
         val newTableName = s"${options.table}".split("\\.").last
-        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO ${newTableName}"
-        executeStatement(conn, renameTempTbl)
-        transactionSuccessful = true
+        val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
+        executeStatement(conn2, renameTempTbl)
       } else {
         throw new PartitionCopyFailureException(
           s"""
              | Job aborted for that there are some partitions failed to copy data to greenPlum:
-             | Total partitions is: ${partNum} and successful partitions is: ${accumulator.value}.
+             | Total partitions is: $partNum and successful partitions is: ${accumulator.value}.
              | You can retry again.
             """.stripMargin)
       }
     } finally {
-      if (!transactionSuccessful && tempTblCreated) {
-        retryingDropTableSilent(conn, tempTable)
+      if (tableExists(conn2, tempTable)) {
+        retryingDropTableSilent(conn2, tempTable)
       }
-      closeConnSilent(conn)
+      closeConnSilent(conn2)
     }
   }
 
   /**
-   * Drop the table and retry automatically when exception occured.
+   * Drop the table and retry automatically when exception occurred.
    */
   def retryingDropTableSilent(conn: Connection, table: String): Unit = {
     val dropTmpTableMaxRetry = 3
@@ -302,9 +311,24 @@ object GreenplumUtils extends Logging {
       df.selectExpr(schema.map(filed => filed.name): _*)
     }.getOrElse(df)
   }
+
+  /**
+   * Returns true if the table already exists in the JDBC database.
+   */
+  def tableExists(conn: Connection, table: String): Boolean = {
+    val query = s"SELECT * FROM $table WHERE 1=0"
+    Try {
+      val statement = conn.prepareStatement(query)
+      try {
+        statement.executeQuery()
+      } finally {
+        statement.close()
+      }
+    }.isSuccess
+  }
 }
 
-private[greenplum] case class CanonicalTblName(schema: Option[String], rawName: Option[String])
+private[greenplum] case class CanonicalTblName(schema: Option[String], rawName: String)
 
 /**
  * Extract schema name and raw table name from a table name string.
@@ -315,8 +339,8 @@ private[greenplum] object TableNameExtractor {
 
   def extract(tableName: String): CanonicalTblName = {
     tableName match {
-      case nonSchemaTable(table) => CanonicalTblName(None, Some(table))
-      case schemaTable(schema, table) => CanonicalTblName(Some(schema), Some(table))
+      case nonSchemaTable(t) => CanonicalTblName(None, t)
+      case schemaTable(schema, t) => CanonicalTblName(Some(schema), t)
       case _ => throw new IllegalArgumentException(
         s"""
            | The table name is illegal, you can set it with the dbtable option, such as

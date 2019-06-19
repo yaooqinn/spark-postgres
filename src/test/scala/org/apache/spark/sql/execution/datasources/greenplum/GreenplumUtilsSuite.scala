@@ -27,10 +27,10 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mockito.MockitoSugar
-
 import org.apache.spark.SparkFunSuite
+
 import org.apache.spark.api.java.function.ForeachPartitionFunction
-import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession}
+import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
@@ -154,7 +154,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         val k = result2.getInt(1)
         val v = result2.getString(2)
         count += 1
-        assert(kvs.get(k).get === v)
+        assert(kvs(k) === v)
       }
       assert(count === kvs.size)
 
@@ -181,6 +181,12 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         count += 1
       }
       assert(count === kvs.size)
+
+      intercept[AnalysisException](defaultSource.createRelation(sparkSession.sqlContext,
+        SaveMode.ErrorIfExists, options.params, df))
+
+      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Ignore, options.params, df)
+
     }
   }
 
@@ -318,9 +324,9 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     val str2 = s"${quote}$table${quote}"
     val str3 = s"$schema.${quote}${quote}$str1${quote}"
     val str4 = s"${quote}test${quote}test"
-    assert(TableNameExtractor.extract(str1) === CanonicalTblName(None, Some(table)))
-    assert(TableNameExtractor.extract(str2) === CanonicalTblName(None, Some(table)))
-    assert(TableNameExtractor.extract(str3) === CanonicalTblName(Some(schema), Some(table)))
+    assert(TableNameExtractor.extract(str1) === CanonicalTblName(None, table))
+    assert(TableNameExtractor.extract(str2) === CanonicalTblName(None, table))
+    assert(TableNameExtractor.extract(str3) === CanonicalTblName(Some(schema), table))
     intercept[IllegalArgumentException](TableNameExtractor.extract(str4))
   }
 
