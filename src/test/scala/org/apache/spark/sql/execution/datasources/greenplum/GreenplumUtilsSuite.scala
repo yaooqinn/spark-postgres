@@ -137,8 +137,11 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
   test("test copy to greenplum") {
     withConnectionAndOptions { (conn, tblname, options) =>
       // scalastyle:off
-      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
-        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
+      val buffer = "测试".getBytes().toBuffer
+      buffer += 0
+      val strWithEmpty = new String(buffer.toArray)
+      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t", 5 -> "\\n",
+        6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试", 11 -> strWithEmpty)
       // scalastyle:on
       val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
       val df = sparkSession.createDataFrame(rdd)
@@ -154,7 +157,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         val k = result2.getInt(1)
         val v = result2.getString(2)
         count += 1
-        assert(kvs(k) === v)
+        assert(kvs(k).filterNot(_ == 0) === v)
       }
       assert(count === kvs.size)
 

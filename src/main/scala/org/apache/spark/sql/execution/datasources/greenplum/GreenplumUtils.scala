@@ -88,6 +88,7 @@ object GreenplumUtils extends Logging {
       case '\n' => "\\n"
       case '\r' => "\\r"
       case `delimiter` => s"\\$delimiter"
+      case c if c == 0 => "" // If this char is an empty character, drop it.
       case c => s"$c"
     }
   }
