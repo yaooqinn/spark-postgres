@@ -24,3 +24,11 @@ class PartitionCopyFailureException(
     errorMsg: String,
     cause: Throwable = null)
   extends Exception(errorMsg, cause)
+
+/**
+ * General exception thrown when copying data to greenplum failed.
+ */
+class CopyDataToGpFailureException(
+    errorMsg: String,
+    cause: Throwable = null)
+  extends Exception(errorMsg, cause)

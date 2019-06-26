@@ -210,6 +210,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
   test("test copy partition") {
     withConnectionAndOptions { (conn, tblname, options) =>
+      val getConnection = () => JdbcUtils.createConnectionFactory(options)()
 
       val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
       val schema = new StructType().add("c1", StringType).add("c2", StringType)
@@ -218,7 +219,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val rows = Array(new GenericRow(values)).toIterator
 
       val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
-      GreenplumUtils.executeStatement(conn, createTbl)
+      GreenplumUtils.retryingExecuteStatement(conn, createTbl, getConnection)
 
       GreenplumUtils.copyPartition(rows, options, schema, tblname)
       val stat = conn.createStatement()
@@ -271,7 +272,9 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
       "dbtable" -> "gptest", "copyTimeout" -> "1ms"))
     val options = GreenplumOptions(paras)
-    val conn = JdbcUtils.createConnectionFactory(options)()
+    val getConnection = () => JdbcUtils.createConnectionFactory(options)()
+    val conn = getConnection()
+
 
     try {
       val values = Array[Any]("\n", "\t", ",", "\r", "\\", "\\n")
@@ -280,7 +283,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         .add("c6", StringType)
       val rows = Array(new GenericRow(values)).toIterator
       val createTbl = s"CREATE TABLE $tblname(c1 text, c2 text, c3 text, c4 text, c5 text, c6 text)"
-      GreenplumUtils.executeStatement(conn, createTbl)
+      GreenplumUtils.retryingExecuteStatement(conn, createTbl, getConnection)
       intercept[TimeoutException](GreenplumUtils.copyPartition(rows, options, schema, tblname))
     } finally {
       GreenplumUtils.closeConnSilent(conn)
@@ -289,6 +292,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
   test("test reorder dataframe's columns when relative gp table is existed") {
     withConnectionAndOptions { (conn, tblname, options) =>
+      val getConnection = () => JdbcUtils.createConnectionFactory(options)()
       // scalastyle:off
       val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
         5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
@@ -298,7 +302,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
       // create a gptable whose columns order is not equal with dataFrame
       val createTbl = s"CREATE TABLE $tblname (_2 text, _1 int)"
-      GreenplumUtils.executeStatement(conn, createTbl)
+      GreenplumUtils.retryingExecuteStatement(conn, createTbl, getConnection)
 
       val defaultSource = new DefaultSource
       defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
@@ -341,6 +345,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val paras = CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t",
         "dbtable" -> s"$schema.$tblname"))
       val options = GreenplumOptions(paras)
+      val getConnection = () => JdbcUtils.createConnectionFactory(options)()
 
       // scalastyle:off
       val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
@@ -349,11 +354,11 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
       val df = sparkSession.createDataFrame(rdd)
 
-      val conn = JdbcUtils.createConnectionFactory(options)()
+      var conn: Connection = null
 
       try {
         val createSchema = s"CREATE SCHEMA IF NOT EXISTS $schema "
-        GreenplumUtils.executeStatement(conn, createSchema)
+        conn = GreenplumUtils.retryingExecuteStatement(conn, createSchema, getConnection)
         val defaultSource = new DefaultSource
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
         assert(JdbcUtils.tableExists(conn, options))
@@ -369,16 +374,18 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       CaseInsensitiveMap(Map("url" -> s"$url", "delimiter" -> "\t", "dbtable" -> s"$schema.test",
         "transactionOn" -> "true"))
     val options = GreenplumOptions(paras)
-    val conn = JdbcUtils.createConnectionFactory(options)()
+    val getConnection = () => JdbcUtils.createConnectionFactory(options)()
+
+    val conn = getConnection()
     try {
       val createSchema = s"CREATE SCHEMA IF NOT EXISTS $schema"
-      GreenplumUtils.executeStatement(conn, createSchema)
+      GreenplumUtils.retryingExecuteStatement(conn, createSchema, getConnection)
       f(conn, options.table, options)
     } finally {
       val dropTbl = s"DROP TABLE IF EXISTS ${options.table}"
       val dropSchema = s"DROP SCHEMA IF EXISTS $schema"
-      GreenplumUtils.executeStatement(conn, dropTbl)
-      GreenplumUtils.executeStatement(conn, dropSchema)
+      GreenplumUtils.retryingExecuteStatement(conn, dropTbl, getConnection)
+      GreenplumUtils.retryingExecuteStatement(conn, dropSchema, getConnection)
       GreenplumUtils.closeConnSilent(conn)
     }
   }

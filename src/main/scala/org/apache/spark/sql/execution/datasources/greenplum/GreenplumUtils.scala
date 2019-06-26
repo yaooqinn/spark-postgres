@@ -19,13 +19,13 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io._
 import java.nio.charset.StandardCharsets
-import java.sql.{Connection, Date, Timestamp}
+import java.sql.{Connection, Date, Statement, Timestamp}
 import java.util.UUID
 import java.util.concurrent.{TimeoutException, TimeUnit}
 
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 import org.postgresql.copy.CopyManager
 import org.postgresql.core.BaseConnection
@@ -116,11 +116,13 @@ object GreenplumUtils extends Logging {
     val strSchema = JdbcUtils.schemaString(df, options.url, options.createTableColumnTypes)
     val createTempTbl = s"CREATE TABLE $tempTable ($strSchema) ${options.createTableOptions}"
 
+    val getConnection = () => JdbcUtils.createConnectionFactory(options)()
+
     // Stage 1. create a _sparkGpTmp table as a shadow of the target Greenplum table. If this stage
     // fails, the whole process will abort.
-    val conn = JdbcUtils.createConnectionFactory(options)()
+    var conn = getConnection()
     try {
-      executeStatement(conn, createTempTbl)
+      conn = retryingExecuteStatement(conn, createTempTbl, getConnection)
     } finally {
       closeConnSilent(conn)
     }
@@ -137,7 +139,7 @@ object GreenplumUtils extends Logging {
     // Otherwise, we will run a rename table ddl statement to rename the tmp table to the final
     // target table.
     val partNum = df.rdd.getNumPartitions
-    val conn2 = JdbcUtils.createConnectionFactory(options)()
+    var conn2 = getConnection()
     try {
       if (accumulator.value == partNum) {
         if (tableExists(conn2, options.table)) {
@@ -146,7 +148,7 @@ object GreenplumUtils extends Logging {
 
         val newTableName = s"${options.table}".split("\\.").last
         val renameTempTbl = s"ALTER TABLE $tempTable RENAME TO $newTableName"
-        executeStatement(conn2, renameTempTbl)
+        conn2 = retryingExecuteStatement(conn2, renameTempTbl, getConnection)
       } else {
         throw new PartitionCopyFailureException(
           s"""
@@ -228,8 +230,7 @@ object GreenplumUtils extends Logging {
       accumulator: Option[LongAccumulator] = None): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
       schema.map(s => makeConverter(s.dataType, options)).toArray
-    val conn = JdbcUtils.createConnectionFactory(options)()
-    val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+    var conn: Connection = null
 
     try {
       val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
@@ -245,6 +246,8 @@ object GreenplumUtils extends Logging {
       val sql = s"COPY $tableName" +
         s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
 
+      conn = JdbcUtils.createConnectionFactory(options)()
+      val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
       val promisedCopyNums = Promise[Long]
       val copyThread = new Thread("copy-to-gp-thread") {
         override def run(): Unit = {
@@ -285,7 +288,9 @@ object GreenplumUtils extends Logging {
         in.close()
       }
     } finally {
-      closeConnSilent(conn)
+      if (conn != null) {
+        closeConnSilent(conn)
+      }
     }
   }
 
@@ -297,13 +302,45 @@ object GreenplumUtils extends Logging {
     }
   }
 
-  def executeStatement(conn: Connection, sql: String): Unit = {
-    val statement = conn.createStatement()
-    try {
-      statement.executeUpdate(sql)
-    } finally {
-      statement.close()
+  def retryingExecuteStatement(
+      conn: Connection,
+      sql: String,
+      getConnection: () => Connection): Connection = {
+    val maxRetry = 3
+    var retryCount = 0
+    var success = false
+    var statement: Statement = null
+    var curConn = conn
+
+    while (!success && retryCount < maxRetry) {
+      try {
+        if (curConn == null || curConn.isClosed) {
+          curConn = getConnection()
+        }
+        statement = curConn.createStatement()
+        statement.executeUpdate(sql)
+        success = true
+      } catch {
+        case e: Exception =>
+          statement = null
+          retryCount += 1
+          logWarning(s"Execute statement $sql failed for $retryCount" +
+            s"/$maxRetry times, and will retry.", e)
+      } finally {
+        if (statement != null) {
+          Try {
+            statement.close()
+          } match {
+            case Failure(e) => logWarning(s"Exception occurred when closing statement.", e)
+            case _ =>
+          }
+        }
+      }
     }
+    if (!success) {
+      logError(s"Execute statement $sql failed for $maxRetry times, and will not retry.")
+    }
+    curConn
   }
 
   def reorderDataFrameColumns(df: DataFrame, tableSchema: Option[StructType]): DataFrame = {
