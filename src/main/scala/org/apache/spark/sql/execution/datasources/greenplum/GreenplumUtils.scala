@@ -231,13 +231,16 @@ object GreenplumUtils extends Logging {
     val dataFile = new File(tmpDir, UUID.randomUUID().toString)
     logInfo(s"Start to write data to local tmp file: ${dataFile.getCanonicalPath}")
     val out = new BufferedOutputStream(new FileOutputStream(dataFile))
+    val startW = System.nanoTime()
     try {
       rows.foreach(r => out.write(
         convertRow(r, schema.length, options.delimiter, valueConverters)))
     } finally {
       out.close()
     }
-    logInfo("Finished writing data to local tmp file")
+    val endW = System.nanoTime()
+    logInfo(s"Finished writing data to local tmp file: ${dataFile.getCanonicalPath}, " +
+      s"time taken: ${(endW - startW) / math.pow(10, 9)}s")
     val in = new BufferedInputStream(new FileInputStream(dataFile))
     val sql = s"COPY $tableName" +
       s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
