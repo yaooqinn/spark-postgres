@@ -41,6 +41,6 @@ case class GreenplumOptions(@transient params: CaseInsensitiveMap[String])
   val dropTempTableMaxRetries: Int = 3
 
   /** Timeout for copying a partition's data to greenplum. */
-  val copyTimeout = Utils.timeStringAsMs(params.getOrElse("copyTimeout", "1h"))
+  val copyTimeout = Utils.timeStringAsMs(params.getOrElse("copyTimeout", "10min"))
   assert(copyTimeout > 0, "The copy timeout should be positive, 10s, 10min, 1h etc.")
 }
