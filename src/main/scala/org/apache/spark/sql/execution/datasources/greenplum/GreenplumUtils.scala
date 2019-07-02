@@ -39,9 +39,7 @@ import org.apache.spark.util.{LongAccumulator, ThreadUtils, Utils}
 
 object GreenplumUtils extends Logging {
 
-  def makeConverter(
-      dataType: DataType,
-      options: GreenplumOptions): (Row, Int) => String = dataType match {
+  def makeConverter(dataType: DataType): (Row, Int) => String = dataType match {
     case StringType => (r: Row, i: Int) => r.getString(i)
     case BooleanType => (r: Row, i: Int) => r.getBoolean(i).toString
     case ByteType => (r: Row, i: Int) => r.getByte(i).toString
@@ -60,7 +58,7 @@ object GreenplumUtils extends Logging {
     case BinaryType => (r: Row, i: Int) =>
       new String(r.getAs[Array[Byte]](i), StandardCharsets.UTF_8)
 
-    case udt: UserDefinedType[_] => makeConverter(udt.sqlType, options)
+    case udt: UserDefinedType[_] => makeConverter(udt.sqlType)
     case _ => (row: Row, ordinal: Int) => row.get(ordinal).toString
   }
 
@@ -228,64 +226,54 @@ object GreenplumUtils extends Logging {
       tableName: String,
       accumulator: Option[LongAccumulator] = None): Unit = {
     val valueConverters: Array[(Row, Int) => String] =
-      schema.map(s => makeConverter(s.dataType, options)).toArray
+      schema.map(s => makeConverter(s.dataType)).toArray
+    val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
+    val dataFile = new File(tmpDir, UUID.randomUUID().toString)
+    logInfo(s"Start to write data to local tmp file: ${dataFile.getCanonicalPath}")
+    val out = new BufferedOutputStream(new FileOutputStream(dataFile))
+    try {
+      rows.foreach(r => out.write(
+        convertRow(r, schema.length, options.delimiter, valueConverters)))
+    } finally {
+      out.close()
+    }
+    logInfo("Finished writing data to local tmp file")
+    val in = new BufferedInputStream(new FileInputStream(dataFile))
+    val sql = s"COPY $tableName" +
+      s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
+
+    val promisedCopyNums = Promise[Long]
     val conn = JdbcUtils.createConnectionFactory(options)()
     val copyManager = new CopyManager(conn.asInstanceOf[BaseConnection])
+    val copyThread = new Thread("copy-to-gp-thread") {
+      override def run(): Unit = promisedCopyNums.complete(Try(copyManager.copyIn(sql, in)))
+    }
 
     try {
-      val tmpDir = Utils.createTempDir(Utils.getLocalDir(SparkEnv.get.conf), "greenplum")
-      val dataFile = new File(tmpDir, UUID.randomUUID().toString)
-      val out = new BufferedOutputStream(new FileOutputStream(dataFile))
+      logInfo(s"Start copy steam to Greenplum with copy command $sql")
+      val start = System.nanoTime()
+      copyThread.start()
       try {
-        rows.foreach(r => out.write(
-          convertRow(r, schema.length, options.delimiter, valueConverters)))
-      } finally {
-        out.close()
-      }
-      val in = new BufferedInputStream(new FileInputStream(dataFile))
-      val sql = s"COPY $tableName" +
-        s" FROM STDIN WITH NULL AS 'NULL' DELIMITER AS E'${options.delimiter}'"
-
-      val promisedCopyNums = Promise[Long]
-      val copyThread = new Thread("copy-to-gp-thread") {
-        override def run(): Unit = {
-          try {
-            promisedCopyNums.trySuccess {
-              copyManager.copyIn(sql, in)
-            }
-          } catch {
-            case e: Exception => promisedCopyNums.failure(e)
-          }
-        }
-      }
-
-      try {
-        logInfo("Start copy steam to Greenplum")
-        val start = System.nanoTime()
-        copyThread.start()
-        try {
-          val nums = ThreadUtils.awaitResult(promisedCopyNums.future,
-            Duration(options.copyTimeout, TimeUnit.MILLISECONDS))
-          val end = System.nanoTime()
-          logInfo(s"Copied $nums row(s) to Greenplum," +
-            s" time taken: ${(end - start) / math.pow(10, 9)}s")
-        } catch {
-          case _: TimeoutException =>
-            throw new TimeoutException(
-              s"""
-                 | The copy operation for copying this partition's data to greenplum has been running for
-                 | more than the timeout: ${TimeUnit.MILLISECONDS.toSeconds(options.copyTimeout)}s.
-                 | You can configure this timeout with option copyTimeout, such as "2h", "100min",
-                 | and default copyTimeout is "1h".
+        val nums = ThreadUtils.awaitResult(promisedCopyNums.future,
+          Duration(options.copyTimeout, TimeUnit.MILLISECONDS))
+        val end = System.nanoTime()
+        logInfo(s"Copied $nums row(s) to Greenplum," +
+          s" time taken: ${(end - start) / math.pow(10, 9)}s")
+      } catch {
+        case _: TimeoutException =>
+          throw new TimeoutException(
+            s"""
+               | The copy operation for copying this partition's data to greenplum has been running for
+               | more than the timeout: ${TimeUnit.MILLISECONDS.toSeconds(options.copyTimeout)}s.
+               | You can configure this timeout with option copyTimeout, such as "2h", "100min",
+               | and default copyTimeout is "1h".
                """.stripMargin)
-        }
-        accumulator.foreach(_.add(1L))
-      } finally {
-        copyThread.interrupt()
-        copyThread.join()
-        in.close()
       }
+      accumulator.foreach(_.add(1L))
     } finally {
+      copyThread.interrupt()
+      copyThread.join()
+      in.close()
       closeConnSilent(conn)
     }
   }

@@ -83,41 +83,41 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
 
     val row2 = Row(null)
 
-    val boolConverter = GreenplumUtils.makeConverter(BooleanType, options)
+    val boolConverter = GreenplumUtils.makeConverter(BooleanType)
     assert(boolConverter.apply(row1, 0) === "true")
     intercept[NullPointerException](boolConverter.apply(row2, 0) === "")
 
-    val byteConverter = GreenplumUtils.makeConverter(ByteType, options)
+    val byteConverter = GreenplumUtils.makeConverter(ByteType)
     assert(byteConverter(row1, 1) === "1")
 
-    val shortConverter = GreenplumUtils.makeConverter(ShortType, options)
+    val shortConverter = GreenplumUtils.makeConverter(ShortType)
     assert(shortConverter(row1, 2) === "2")
 
-    val intConverter = GreenplumUtils.makeConverter(IntegerType, options)
+    val intConverter = GreenplumUtils.makeConverter(IntegerType)
     assert(intConverter(row1, 3) === "3")
 
-    val longConverter = GreenplumUtils.makeConverter(LongType, options)
+    val longConverter = GreenplumUtils.makeConverter(LongType)
     assert(longConverter(row1, 4) === "4")
 
-    val floatConverter = GreenplumUtils.makeConverter(FloatType, options)
+    val floatConverter = GreenplumUtils.makeConverter(FloatType)
     assert(floatConverter(row1, 5) === "5.0")
 
-    val doubleConverter = GreenplumUtils.makeConverter(DoubleType, options)
+    val doubleConverter = GreenplumUtils.makeConverter(DoubleType)
     assert(doubleConverter(row1, 6) === "6.0")
 
-    val strConverter = GreenplumUtils.makeConverter(StringType, options)
+    val strConverter = GreenplumUtils.makeConverter(StringType)
     assert(strConverter(row1, 7) === "7")
 
-    val binConverter = GreenplumUtils.makeConverter(BinaryType, options)
+    val binConverter = GreenplumUtils.makeConverter(BinaryType)
     assert(binConverter(row1, 8) === "8")
 
-    val dateConverter = GreenplumUtils.makeConverter(DateType, options)
+    val dateConverter = GreenplumUtils.makeConverter(DateType)
     assert(dateConverter(row1, 9) === new Date(now).toString)
 
-    val tsConverter = GreenplumUtils.makeConverter(TimestampType, options)
+    val tsConverter = GreenplumUtils.makeConverter(TimestampType)
     assert(tsConverter(row1, 10) === new Timestamp(now).toString)
 
-    val decimalConverter = GreenplumUtils.makeConverter(DecimalType(2, 0), options)
+    val decimalConverter = GreenplumUtils.makeConverter(DecimalType(2, 0))
     assert(decimalConverter(row1, 11) === new java.math.BigDecimal(11).toString)
 
 //    val arrConverter = GreenplumUtils.makeConverter(ArrayType(StringType), options)
@@ -203,7 +203,7 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         .add("c3", StringType).add("c4", StringType).add("c5", StringType)
         .add("c6", StringType)
       val valueConverters: Array[(Row, Int) => String] =
-        schema.map(s => GreenplumUtils.makeConverter(s.dataType, options)).toArray
+        schema.map(s => GreenplumUtils.makeConverter(s.dataType)).toArray
 
       val row = new GenericRow(values)
       val str = GreenplumUtils.convertRow(row, schema.length, options.delimiter, valueConverters)
