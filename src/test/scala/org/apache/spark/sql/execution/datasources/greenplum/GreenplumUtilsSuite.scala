@@ -19,7 +19,6 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io.File
 import java.sql.{Connection, Date, SQLException, Timestamp}
-import java.util.TimeZone
 
 import scala.concurrent.TimeoutException
 
@@ -27,8 +26,8 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mockito.MockitoSugar
-import org.apache.spark.SparkFunSuite
 
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.api.java.function.ForeachPartitionFunction
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions.GenericRow

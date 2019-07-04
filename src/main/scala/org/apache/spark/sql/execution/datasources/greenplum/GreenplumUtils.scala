@@ -298,12 +298,6 @@ object GreenplumUtils extends Logging {
     }
   }
 
-  def reorderDataFrameColumns(df: DataFrame, tableSchema: Option[StructType]): DataFrame = {
-    tableSchema.map { schema =>
-      df.selectExpr(schema.map(filed => filed.name): _*)
-    }.getOrElse(df)
-  }
-
   /**
    * Returns true if the table already exists in the JDBC database.
    */
