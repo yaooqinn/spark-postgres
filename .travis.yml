@@ -1,0 +1,39 @@
+language: scala
+scala:
+  - 2.11.8
+
+cache:
+  directories:
+    - $HOME/.m2
+    - ./build
+
+before_deploy:
+  - mvn clean package -DskipTests
+
+deploy:
+  - provider: pages
+    skip_cleanup: true
+    github_token: $GITHUB_TOKEN
+    email: yaooqinn@hotmail.com
+    name: Kent Yao
+    on:
+      branch: master
+  - provider: releases
+    api_key: $GITHUB_TOKEN
+    file_glob: true
+    file: target/spark-greenplum*.jar
+    skip_cleanup: true
+    on:
+      tags: true
+
+jobs:
+  include:
+    - stage: spark2.4
+      language: scala
+      script: mvn clean install -Pspark-2.4 -Dmaven.javadoc.skip=true -B -V
+    - stage: spark2.3
+      language: scala
+      script: mvn clean install -Dmaven.javadoc.skip=true -B -V
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)
