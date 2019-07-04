@@ -64,7 +64,7 @@ class DefaultSource
     val options = GreenplumOptions(CaseInsensitiveMap(parameters))
     val isCaseSensitive = sqlContext.conf.caseSensitiveAnalysis
 
-    val maxConns = options.maxConnections
+    val m = options.maxConnections
     val conn = JdbcUtils.createConnectionFactory(options)()
     try {
       if (tableExists(conn, options.table)) {
@@ -78,16 +78,16 @@ class DefaultSource
               JdbcUtils.isCascadingTruncateTable(options.url).contains(false) =>
             JdbcUtils.truncateTable(conn, options)
             nonTransactionalCopy(
-              if (options.transactionOn) orderedDf.coalesce(1) else orderedDf.coalesce(maxConns),
+              if (options.transactionOn) orderedDf.coalesce(1) else orderedDf.coalesce(m),
               orderedDf.schema, options)
           case SaveMode.Overwrite =>
-            transactionalCopy(orderedDf.coalesce(maxConns), orderedDf.schema, options)
+            transactionalCopy(orderedDf.coalesce(m), orderedDf.schema, options)
           case SaveMode.Append =>
             nonTransactionalCopy(
               if (options.transactionOn) {
                 orderedDf.coalesce(1)
               } else {
-                orderedDf.coalesce(maxConns)
+                orderedDf.coalesce(m)
               },
               orderedDf.schema, options)
           case SaveMode.ErrorIfExists =>
@@ -95,7 +95,7 @@ class DefaultSource
           case SaveMode.Ignore => // do nothing
         }
       } else {
-        transactionalCopy(df.coalesce(maxConns), df.schema, options)
+        transactionalCopy(df.coalesce(m), df.schema, options)
       }
     } finally {
       closeConnSilent(conn)

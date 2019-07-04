@@ -361,21 +361,19 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
 
         assert(JdbcUtils.tableExists(conn, options))
+
         val relation = defaultSource.createRelation(sparkSession.sqlContext, paras)
         relation.asInstanceOf[GreenplumRelation].insert(df, true)
         assert(JdbcUtils.tableExists(conn, options))
         relation.asInstanceOf[GreenplumRelation].insert(df, false)
         assert(JdbcUtils.tableExists(conn, options))
-        val paras2 = paras ++: Map("transactionOn" -> "true")
+        val paras2 = paras ++: Map("transactionOn" -> "true", "truncate" -> "true")
         val relation2 = defaultSource.createRelation(sparkSession.sqlContext, paras2)
         relation2.asInstanceOf[GreenplumRelation].insert(df, true)
         relation2.asInstanceOf[GreenplumRelation].insert(df, false)
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, paras2, df)
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, paras2, df)
-        defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, paras2, df)
-
         assert(JdbcUtils.tableExists(conn, options))
-
       } finally {
         GreenplumUtils.closeConnSilent(conn)
       }
