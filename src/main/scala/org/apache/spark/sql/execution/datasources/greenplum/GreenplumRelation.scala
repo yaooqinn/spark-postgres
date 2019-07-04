@@ -62,23 +62,34 @@ private[sql] case class GreenplumRelation(
 
   override def insert(data: DataFrame, overwrite: Boolean): Unit = {
     val conn = JdbcUtils.createConnectionFactory(options)()
+    val maxConnections = options.maxConnections
     try {
       if (tableExists(conn, options.table)) {
         if (overwrite) {
           if (options.isTruncate &&
             JdbcUtils.isCascadingTruncateTable(options.url).contains(false)) {
             JdbcUtils.truncateTable(conn, options)
-            nonTransactionalCopy(if (options.transactionOn) data.coalesce(1) else data,
+            nonTransactionalCopy(
+              if (options.transactionOn) {
+                data.coalesce(1)
+              } else {
+                data.coalesce(maxConnections)
+              },
               schema, options)
           } else {
-            transactionalCopy(data, schema, options)
+            transactionalCopy(data.coalesce(maxConnections), schema, options)
           }
         } else {
-          nonTransactionalCopy(if (options.transactionOn) data.coalesce(1) else data,
+          nonTransactionalCopy(
+            if (options.transactionOn) {
+              data.coalesce(1)
+            } else {
+              data.coalesce(maxConnections)
+            },
             schema, options)
         }
       } else {
-        transactionalCopy(data, schema, options)
+        transactionalCopy(data.coalesce(maxConnections), schema, options)
       }
     } finally {
       closeConnSilent(conn)
