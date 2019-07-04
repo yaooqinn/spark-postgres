@@ -372,6 +372,9 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
         relation2.asInstanceOf[GreenplumRelation].insert(df, false)
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, paras2, df)
         defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Overwrite, paras2, df)
+        defaultSource.createRelation(sparkSession.sqlContext,
+          SaveMode.Overwrite, options.params, df)
+
         assert(JdbcUtils.tableExists(conn, options))
 
       } finally {
