@@ -19,7 +19,6 @@ package org.apache.spark.sql.execution.datasources.greenplum
 
 import java.io.File
 import java.sql.{Connection, Date, SQLException, Timestamp}
-import java.util.TimeZone
 
 import scala.concurrent.TimeoutException
 
@@ -27,10 +26,11 @@ import io.airlift.testing.postgresql.TestingPostgreSqlServer
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mockito.MockitoSugar
-import org.apache.spark.SparkFunSuite
 
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.api.java.function.ForeachPartitionFunction
 import org.apache.spark.sql._
+import org.apache.spark.sql.catalyst.analysis.GreenPlumColumnCheckerExtension
 import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
@@ -52,6 +52,8 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       .config("spark.app.name", "testGp")
       .config("spark.sql.warehouse.dir", s"${tempDir.getAbsolutePath}/warehouse")
       .config("spark.local.dir", s"${tempDir.getAbsolutePath}/local")
+      .config("spark.sql.extensions", classOf[GreenPlumColumnCheckerExtension].getCanonicalName)
+      .enableHiveSupport()
       .getOrCreate()
   }
 
@@ -290,34 +292,6 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
     }
   }
 
-  test("test reorder dataframe's columns when relative gp table is existed") {
-    withConnectionAndOptions { (conn, tblname, options) =>
-      // scalastyle:off
-      val kvs = Map[Int, String](0 -> " ", 1 -> "\t", 2 -> "\n", 3 -> "\r", 4 -> "\\t",
-        5 -> "\\n", 6 -> "\\", 7 -> ",", 8 -> "te\tst", 9 -> "1`'`", 10 -> "中文测试")
-      // scalastyle:on
-      val rdd = sparkSession.sparkContext.parallelize(kvs.toSeq)
-      val df = sparkSession.createDataFrame(rdd)
-
-      // create a gptable whose columns order is not equal with dataFrame
-      val createTbl = s"CREATE TABLE $tblname (_2 text, _1 int)"
-      GreenplumUtils.executeStatement(conn, createTbl)
-
-      val defaultSource = new DefaultSource
-      defaultSource.createRelation(sparkSession.sqlContext, SaveMode.Append, options.params, df)
-
-      val stmt = conn.createStatement()
-      stmt.executeQuery(s"select * from $tblname")
-      stmt.setFetchSize(kvs.size + 1)
-      val result4 = stmt.getResultSet
-      var count = 0
-      while (result4.next()) {
-        count += 1
-      }
-      assert(count === kvs.size)
-    }
-  }
-
   test("test convert the table name to canonical table name") {
     val quote = "\""
     val schema = "schema"
@@ -377,6 +351,40 @@ class GreenplumUtilsSuite extends SparkFunSuite with MockitoSugar {
       } finally {
         GreenplumUtils.closeConnSilent(conn)
       }
+    }
+  }
+
+  test("test greenplum check rule") {
+    withConnectionAndOptions { (conn, tblname, options) => {
+      withTable("ta") {
+        // create gp table
+        val createGpTbl = s"CREATE TABLE $tblname(_1 INT, _2 TEXT)"
+        val createSparkTbl = s"CREATE TABLE ta(_1 INT, _2 STRING)"
+        val createTempTbl =
+          s"""
+             | CREATE TEMPORARY TABLE tbl
+             | USING org.apache.spark.sql.execution.datasources.greenplum.DefaultSource
+             | options (
+             | url "$url",
+             | dbtable "$tblname")
+         """.stripMargin
+        val rightQuery = s"EXPLAIN INSERT INTO TABLE tbl select * FROM (SELECT _1, _2 FROM ta) t"
+        val wrongQuery = s"EXPLAIN INSERT INTO TABLE tbl select * FROM (SELECT _2, _1 FROM ta) t"
+
+        GreenplumUtils.executeStatement(conn, createGpTbl)
+        sparkSession.sql(createTempTbl)
+        sparkSession.sql(createSparkTbl)
+        assert(!sparkSession.sql(rightQuery).first().getString(0).contains("AnalysisException"))
+        assert(sparkSession.sql(wrongQuery).first().getString(0).contains("AnalysisException"))
+      }
+    }
+    }
+  }
+
+  def withTable(tableNames: String*)(f: => Unit): Unit = {
+    tableNames.foreach(name => sparkSession.sql(s"DROP TABLE IF EXISTS $name"))
+    try f finally {
+      tableNames.foreach(name => sparkSession.sql(s"DROP TABLE IF EXISTS $name"))
     }
   }
 

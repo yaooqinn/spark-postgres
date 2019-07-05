@@ -80,6 +80,12 @@
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-hive_${scala.binary.ver}</artifactId>
+            <version>${spark.ver}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- https://mvnrepository.com/artifact/io.airlift/testing-postgresql-server -->
         <dependency>
             <groupId>io.airlift</groupId>
