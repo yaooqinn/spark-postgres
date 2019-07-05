@@ -8,6 +8,14 @@ Also, this library is fully **transactional** .
 
 ## Try it now !
 
+### Configuration
+We add a rule to check the column names of greenplum table and spark sql query.
+You can set it as below.
+
+```
+spark.sql.extensions=org.apache.spark.sql.catalyst.analysis.GreenPlumColumnCheckerExtension
+```
+
 ### CTAS
 ```genericsql
 CREATE TABLE tbl
