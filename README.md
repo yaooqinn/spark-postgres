@@ -41,10 +41,8 @@ INSERT INTO TABLE tbl SELECT * FROM tpcds_100g.store_sales WHERE ss_sold_date_sk
 ```
 #### Configuration
 
-When we using `View & Insert` to write data into GreenPlum,
-we need to create a gp table firstly, and then create the relative temporary spark table, whose schema is same with the gp table.
-When inserting the sub query's data into the temporary spark table, we may need to check whether the schema of sub query
-is consistent with that of gp table.
+If we use `View & Insert` to write data into GreenPlum, we need to create a gp table firstly, and then create the relative temporary spark table, whose schema is same with the gp table.
+When inserting the sub query's data into the temporary spark table, we may need to check whether the schema of sub query is consistent with that of gp table.
 Therefore, we add a rule to check it.
 You can set it as below.
 
