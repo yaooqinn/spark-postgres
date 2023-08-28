@@ -30,7 +30,7 @@
     </licenses>
 
     <properties>
-        <postgresql.ver>9.3-1102-jdbc41</postgresql.ver>
+        <postgresql.ver>42.3.7</postgresql.ver>
         <scala.binary.ver>2.11</scala.binary.ver>
         <scala.ver>2.11.8</scala.ver>
         <scalatest.ver>3.0.3</scalatest.ver>
